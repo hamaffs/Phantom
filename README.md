@@ -25,7 +25,8 @@ Designed for **accuracy first**: a `[ FOUND ]` requires positive evidence (a pre
 ## Quick start
 
 ```bash
-cd /home/hamaffs/phantom
+git clone git@github.com:hamaffs/Phantom-.git phantom
+cd phantom
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 sudo ln -s "$PWD/phantom" /usr/local/bin/phantom
 phantom <username> --found-only
@@ -74,7 +75,8 @@ phantom/
 ## Install
 
 ```bash
-cd /home/hamaffs/phantom
+git clone git@github.com:hamaffs/Phantom-.git phantom
+cd phantom
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
@@ -83,22 +85,24 @@ python3 -m venv .venv
 
 ### Make `phantom` callable from anywhere
 
-Pick one:
+Run these from inside the cloned project directory. `$PWD` resolves to wherever you put it, so the symlink stays correct no matter where you cloned.
 
 **System-wide (recommended)** — one `sudo` command:
 ```bash
-sudo ln -s /home/hamaffs/phantom/phantom /usr/local/bin/phantom
+sudo ln -s "$PWD/phantom" /usr/local/bin/phantom
 ```
 
 **Per-user** — no sudo, edits `~/.bashrc` once:
 ```bash
 mkdir -p ~/.local/bin
-ln -s /home/hamaffs/phantom/phantom ~/.local/bin/phantom
+ln -s "$PWD/phantom" ~/.local/bin/phantom
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 # then re-source: source ~/.bashrc
 ```
 
 **Project-local only** — no install, just call `./phantom <username>` from the project directory.
+
+> The `phantom` wrapper uses `readlink -f` to find its own location, so it works from any clone path — no need to pin the project to a specific directory.
 
 ## Usage
 

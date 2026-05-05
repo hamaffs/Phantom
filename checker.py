@@ -1673,8 +1673,8 @@ Notes:
   - The tool runs entirely on public data — no auth, no API keys, no cookies.
   - Bot-walled sites (LinkedIn, Reddit on some IPs) return [   ?   ].
   - For the most accurate results, use the default variant engine.
-  - To make this command available everywhere:
-      sudo ln -s /home/hamaffs/phantom/phantom /usr/local/bin/phantom
+  - To make this command available everywhere, from inside the cloned dir:
+      sudo ln -s "$PWD/phantom" /usr/local/bin/phantom
 """
 
 
