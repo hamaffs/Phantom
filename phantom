@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Phantom wrapper — runs checker.py via the project's venv so dependencies
+# are always satisfied. Resolves its own location so it works whether
+# called directly, symlinked into PATH, or invoked from any cwd.
+set -e
+SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+DIR="$(dirname "$SCRIPT")"
+
+if [ ! -x "$DIR/.venv/bin/python" ]; then
+  echo "phantom: venv missing at $DIR/.venv — run:"  >&2
+  echo "  python3 -m venv $DIR/.venv && $DIR/.venv/bin/pip install -r $DIR/requirements.txt" >&2
+  exit 1
+fi
+
+exec "$DIR/.venv/bin/python" "$DIR/checker.py" "$@"
