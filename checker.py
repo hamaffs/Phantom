@@ -1005,6 +1005,21 @@ def _run_api_subcommand(argv: list[str]) -> int:
     return 2
 
 
+# Domains whose accounts don't issue user emails (social/streaming/forum
+# platforms). Hunter.io will happily search them and return spurious
+# corporate or generic addresses, so skip the call entirely.
+_HUNTER_DOMAIN_BLOCKLIST = frozenset({
+    "instagram.com", "twitter.com", "x.com", "tiktok.com",
+    "threads.net", "facebook.com", "youtube.com", "twitch.tv",
+    "reddit.com", "pastebin.com", "pinterest.com", "tumblr.com",
+    "soundcloud.com", "telegram.org", "discord.com", "linkedin.com",
+})
+
+# Minimum Hunter.io score to surface as a real match. Below this the
+# result is recorded as low-confidence and the address is dropped.
+_HUNTER_MIN_SCORE = 70
+
+
 def _looks_like_real_name(s: str) -> bool:
     """Cheap filter for Hunter.io: a real full name has at least two
     whitespace-separated parts, with the first and last each ≥2 chars.
@@ -1028,9 +1043,17 @@ async def discover_emails(
     expects an org domain, but we ship what the user has on hand and let
     the score speak for itself.
 
-    Returns {site_name: {email, score, domain}} on success or
-    {site_name: {error, domain}} on per-call failure. Identical
-    (full_name, domain) pairs are de-duplicated to one API call.
+    Per-site outcome shapes:
+      success     {email, score, domain}
+      low score   {low_confidence: True, score, domain}  (email dropped)
+      api error   {error, domain}
+      pre-skip    {skipped: <reason>, domain?}
+
+    Identical (full_name, domain) pairs are de-duplicated to one API
+    call. Domains in _HUNTER_DOMAIN_BLOCKLIST (social/streaming
+    platforms that don't issue user emails) are skipped before any
+    network call. Successful results below _HUNTER_MIN_SCORE are
+    discarded as low-confidence rather than surfaced as a match.
     """
     from urllib.parse import urlparse
 
@@ -1049,6 +1072,9 @@ async def discover_emails(
             host = host[4:]
         if not host:
             skipped[r.site] = {"skipped": "no domain"}
+            continue
+        if host in _HUNTER_DOMAIN_BLOCKLIST:
+            skipped[r.site] = {"skipped": "social platform", "domain": host}
             continue
         queue.append((r, display, host))
 
@@ -1092,11 +1118,24 @@ async def discover_emails(
                             info = {"error": err, "domain": domain}
                         else:
                             data = (payload.get("data") if isinstance(payload, dict) else None) or {}
-                            info = {
-                                "email": data.get("email") or None,
-                                "score": data.get("score"),
-                                "domain": domain,
-                            }
+                            email = data.get("email") or None
+                            score = data.get("score")
+                            if (
+                                email
+                                and isinstance(score, (int, float))
+                                and score < _HUNTER_MIN_SCORE
+                            ):
+                                info = {
+                                    "low_confidence": True,
+                                    "score": score,
+                                    "domain": domain,
+                                }
+                            else:
+                                info = {
+                                    "email": email,
+                                    "score": score,
+                                    "domain": domain,
+                                }
                 except asyncio.TimeoutError:
                     info = {"error": "timeout", "domain": domain}
                 except Exception as e:
@@ -1135,6 +1174,12 @@ def _attach_emails_to_found(
                 if info.get("domain"):
                     r.profile["email_domain"] = info["domain"]
                 n += 1
+            elif info.get("low_confidence"):
+                r.profile["email_low_confidence"] = True
+                if info.get("score") is not None:
+                    r.profile["email_score"] = info["score"]
+                if info.get("domain"):
+                    r.profile["email_domain"] = info["domain"]
             elif info.get("error"):
                 r.profile["email_error"] = info["error"]
     return n
@@ -1160,6 +1205,10 @@ def _print_emails_section(
             score = info.get("score")
             tail = f" (score {score})" if score is not None else ""
             rows.append((r.site, info["email"] + tail, "ok"))
+        elif info.get("low_confidence"):
+            score = info.get("score")
+            tail = f" (score {score})" if score is not None else ""
+            rows.append((r.site, f"low confidence{tail}", "dim"))
         elif info.get("error"):
             rows.append((r.site, f"error: {info['error']}", "err"))
         elif info.get("skipped"):
