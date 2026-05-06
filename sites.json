@@ -278,9 +278,9 @@
     "url": "https://m.twitch.tv/{username}",
     "method": "message",
     "presence_text": [
-      "al:ios:url\" content=\"twitch.tv/{username}\"",
-      "og:url\" content=\"https://www.twitch.tv/{username}\"",
-      "{username} streams live on Twitch"
+      "https://player.twitch.tv/?channel={username}",
+      "\"{username} - Twitch\"",
+      "https://www.twitch.tv/{username}"
     ],
     "absence_text": ["Sorry. Unless you've got a time machine"],
     "protection": ["tls_fingerprint"],
