@@ -34,7 +34,7 @@ import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 
 from enrich import extract_profile
-from identity import build_overall_and_clusters
+from identity import _normalise_country, build_overall_and_clusters
 from variants import generate as generate_variants
 from watch import (
     Snapshot, diff as compute_diff, load_history, render_diff_terminal,
@@ -965,6 +965,104 @@ def _dedupe_same_site_dicts(found_dicts: list[dict]) -> list[dict]:
         ]
         merged.append(primary)
     return untouched + merged
+
+
+def _load_identity_hint(path: Path) -> Optional[dict]:
+    """Read a previous Phantom JSON report and pull the bits we can use as
+    a sanity filter for a fresh name-mode scan: a country (from geo_hint
+    first, falling back to a normalisable item in `locations`), a bio
+    language (the most common per-FOUND `language`), and a display name.
+
+    Returns None if the file can't be parsed or carries no usable signal.
+    Display name is informational only — filtering uses country/language.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"error: --identity-hint {path}: {e}", file=sys.stderr)
+        return None
+
+    overall = data.get("overall_identity") or data.get("identity") or {}
+
+    country = None
+    geo = overall.get("geo_hint") or {}
+    if isinstance(geo, dict) and geo.get("region"):
+        country = _normalise_country(geo["region"]) or geo["region"].strip()
+    if not country:
+        for loc in overall.get("locations") or []:
+            country = _normalise_country(loc) if isinstance(loc, str) else None
+            if country:
+                break
+
+    lang_counts: dict[str, int] = {}
+    for f in data.get("found") or []:
+        p = (f.get("profile") or {}) if isinstance(f, dict) else {}
+        lang = p.get("language")
+        if isinstance(lang, str) and lang.strip():
+            lang_counts[lang] = lang_counts.get(lang, 0) + 1
+    language = max(lang_counts, key=lang_counts.get) if lang_counts else None
+
+    display_name = overall.get("display_name") or None
+
+    if not (country or language):
+        print(
+            f"warning: --identity-hint {path} has no usable country or "
+            f"language signal; nothing to filter on.",
+            file=sys.stderr,
+        )
+        return None
+
+    return {
+        "country": country,
+        "language": language,
+        "display_name": display_name,
+        "source": str(path),
+    }
+
+
+def _filter_results_by_hint(
+    grouped: list[tuple[str, list["CheckResult"]]],
+    hint: dict,
+) -> int:
+    """Reclassify FOUND hits whose profile country or language clearly
+    contradicts the hint. The hit isn't deleted — its `exists` flips from
+    True to None (UNKNOWN) and `reason` records the mismatch, so the row
+    survives in the report for auditing while staying out of FOUND and
+    out of the identity-correlation pool.
+
+    Missing data is never treated as a contradiction: a profile with no
+    location and no language is left alone.
+    """
+    expected_country = hint.get("country")
+    expected_lang = hint.get("language")
+    n_filtered = 0
+
+    for _, rs in grouped:
+        for r in rs:
+            if r.exists is not True:
+                continue
+            profile = r.profile or {}
+            mismatches: list[str] = []
+
+            if expected_country:
+                loc = profile.get("location")
+                if isinstance(loc, str) and loc.strip():
+                    observed = _normalise_country(loc)
+                    if observed and observed.lower() != expected_country.lower():
+                        mismatches.append(f"country={observed}≠{expected_country}")
+
+            if expected_lang:
+                lang = profile.get("language")
+                if isinstance(lang, str) and lang.strip() and lang != expected_lang:
+                    mismatches.append(f"lang={lang}≠{expected_lang}")
+
+            if mismatches:
+                r.exists = None
+                tag = "filter:" + ",".join(mismatches)
+                r.reason = f"{r.reason}+{tag}" if r.reason else tag
+                n_filtered += 1
+
+    return n_filtered
 
 
 def _flatten(grouped: list[tuple[str, list[CheckResult]]]):
@@ -2216,6 +2314,14 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "--list-variants", action="store_true",
         help="print the generated variants and exit (no network calls)",
     )
+    p.add_argument(
+        "--identity-hint", metavar="REPORT.json",
+        help="path to a previous Phantom JSON report. In name mode, FOUND "
+             "hits whose profile location or bio language clearly contradict "
+             "the hint's country / language are reclassified as UNKNOWN — "
+             "cuts down on collisions with strangers who happen to share a "
+             "name-derived handle.",
+    )
     p.add_argument("--found-only", action="store_true", help="only print hits")
     p.add_argument("--json", dest="as_json", action="store_true", help="emit JSON results to stdout")
     p.add_argument(
@@ -2294,6 +2400,31 @@ def main(argv: Optional[list[str]] = None) -> int:
             file=sys.stderr,
         )
 
+    is_name_mode = len(raw.split()) >= 2
+    hint: Optional[dict] = None
+    if args.identity_hint:
+        if not is_name_mode:
+            print(
+                "warning: --identity-hint is ignored outside name mode "
+                "(input must be two or more space-separated tokens).",
+                file=sys.stderr,
+            )
+        else:
+            hint_path = Path(args.identity_hint)
+            if not hint_path.is_file():
+                print(f"error: --identity-hint file not found: {hint_path}", file=sys.stderr)
+                return 2
+            hint = _load_identity_hint(hint_path)
+            if hint:
+                bits = []
+                if hint.get("country"): bits.append(f"country={hint['country']}")
+                if hint.get("language"): bits.append(f"language={hint['language']}")
+                print(
+                    f"identity hint: filtering FOUND hits against {', '.join(bits)} "
+                    f"(from {hint['source']})",
+                    file=sys.stderr,
+                )
+
     cache = ResponseCache(enabled=not args.no_cache)
     phantom = Phantom(
         sites,
@@ -2306,6 +2437,15 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     async def _scan_and_correlate():
         results = await phantom.run_many(variants)
+        if hint:
+            n_filtered = _filter_results_by_hint(results, hint)
+            if n_filtered:
+                print(
+                    f"identity hint: discarded {n_filtered} FOUND hit"
+                    f"{'s' if n_filtered != 1 else ''} (location or language "
+                    f"mismatch).",
+                    file=sys.stderr,
+                )
         if args.no_identity:
             return results, None, []
         found_dicts: list[dict] = []

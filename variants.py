@@ -35,6 +35,12 @@ _DIGIT_BOUNDARY_RE = re.compile(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])")
 _BLIND_SPLIT_MAX_LEN = 14
 _BLIND_SPLIT_MIN_PIECE = 2  # avoid 1-char prefixes/suffixes ("h.amaffs", "hamaff.s")
 
+# Name-mode floor: short permutations like "kmalay" / "malayk" collide with
+# huge numbers of unrelated accounts on every platform, drowning the signal.
+# Below 8 chars there's not enough entropy for a name-derived handle to
+# uniquely identify the target — drop them.
+_NAME_MIN_LEN = 8
+
 
 def _split_parts(token: str) -> list[str]:
     """Detect word boundaries in `token`.
@@ -134,8 +140,9 @@ def _variants_name(first: str, last: str) -> list[str]:
     """
     f, l = first.lower(), last.lower()
     if not f or not l:
-        return [f or l]
-    return [
+        single = f or l
+        return [single] if len(single) >= _NAME_MIN_LEN else []
+    candidates = [
         f"{f}{l}",
         f"{f}.{l}",
         f"{f}_{l}",
@@ -146,6 +153,7 @@ def _variants_name(first: str, last: str) -> list[str]:
         f"{l}_{f}",
         f"{l}{f[0]}",
     ]
+    return [v for v in candidates if len(v) >= _NAME_MIN_LEN]
 
 
 def generate(raw: str) -> list[str]:
