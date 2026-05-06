@@ -275,7 +275,7 @@
   {
     "name": "Twitch",
     "category": "gaming",
-    "url": "https://m.twitch.tv/{username}",
+    "url": "https://www.twitch.tv/{username}",
     "method": "message",
     "presence_text": [
       "https://player.twitch.tv/?channel={username}",
