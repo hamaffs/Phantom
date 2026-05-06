@@ -33,6 +33,7 @@ from typing import Optional
 import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 
+import apis
 from enrich import extract_profile
 from identity import _normalise_country, build_overall_and_clusters
 from variants import generate as generate_variants
@@ -967,6 +968,201 @@ def _dedupe_same_site_dicts(found_dicts: list[dict]) -> list[dict]:
     return untouched + merged
 
 
+def _run_api_subcommand(argv: list[str]) -> int:
+    """Handle `phantom --api <cmd> [args...]`. Two subcommands today:
+
+    - add SERVICE KEY: store a key (overwrites any existing one).
+    - list: print configured services without revealing the keys.
+    """
+    usage = "usage: phantom --api {add SERVICE KEY | list}"
+    if not argv:
+        print(usage, file=sys.stderr)
+        return 2
+    cmd = argv[0].lower()
+    if cmd == "add":
+        if len(argv) != 3:
+            print("usage: phantom --api add SERVICE KEY", file=sys.stderr)
+            return 2
+        try:
+            path = apis.add(argv[1], argv[2])
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print(f"saved {argv[1].lower()} key to {path}")
+        return 0
+    if cmd == "list":
+        services = apis.list_services()
+        if not services:
+            print("no API keys configured.")
+            print("add one with: phantom --api add SERVICE KEY")
+            return 0
+        print(f"Configured API keys ({apis.config_path()}):")
+        for s in services:
+            print(f"  {s:<10}  [configured]")
+        return 0
+    print(f"unknown --api subcommand: {argv[0]}", file=sys.stderr)
+    print(usage, file=sys.stderr)
+    return 2
+
+
+async def discover_emails(
+    found: list["CheckResult"],
+    api_key: str,
+    timeout: float = 15.0,
+) -> dict[str, dict]:
+    """Query Hunter.io email-finder for each FOUND profile that has a
+    display name. Uses the site's hostname as the company domain — Hunter
+    expects an org domain, but we ship what the user has on hand and let
+    the score speak for itself.
+
+    Returns {site_name: {email, score, domain}} on success or
+    {site_name: {error, domain}} on per-call failure. Identical
+    (full_name, domain) pairs are de-duplicated to one API call.
+    """
+    from urllib.parse import urlparse
+
+    queue: list[tuple["CheckResult", str, str]] = []
+    skipped: dict[str, dict] = {}
+    for r in found:
+        display = ((r.profile or {}).get("display_name") or "").strip()
+        if not display:
+            skipped[r.site] = {"skipped": "no display_name"}
+            continue
+        host = (urlparse(r.url).hostname or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if not host:
+            skipped[r.site] = {"skipped": "no domain"}
+            continue
+        queue.append((r, display, host))
+
+    if not queue:
+        return skipped
+
+    cache: dict[tuple[str, str], dict] = {}
+    out: dict[str, dict] = dict(skipped)
+    sem = asyncio.Semaphore(5)
+
+    async with aiohttp.ClientSession() as session:
+        async def lookup(r, full_name, domain):
+            cache_key = (full_name.lower(), domain)
+            if cache_key in cache:
+                return r.site, dict(cache[cache_key])
+            params = {
+                "domain": domain,
+                "full_name": full_name,
+                "api_key": api_key,
+            }
+            async with sem:
+                try:
+                    async with session.get(
+                        "https://api.hunter.io/v2/email-finder",
+                        params=params,
+                        timeout=ClientTimeout(total=timeout),
+                    ) as resp:
+                        try:
+                            payload = await resp.json(content_type=None)
+                        except Exception:
+                            payload = {}
+                        if resp.status == 401:
+                            info = {"error": "invalid Hunter.io API key (401)", "domain": domain}
+                        elif resp.status == 429:
+                            info = {"error": "Hunter.io rate-limited (429)", "domain": domain}
+                        elif resp.status != 200:
+                            err = "http " + str(resp.status)
+                            errs = payload.get("errors") if isinstance(payload, dict) else None
+                            if isinstance(errs, list) and errs and isinstance(errs[0], dict):
+                                err = errs[0].get("details") or errs[0].get("id") or err
+                            info = {"error": err, "domain": domain}
+                        else:
+                            data = (payload.get("data") if isinstance(payload, dict) else None) or {}
+                            info = {
+                                "email": data.get("email") or None,
+                                "score": data.get("score"),
+                                "domain": domain,
+                            }
+                except asyncio.TimeoutError:
+                    info = {"error": "timeout", "domain": domain}
+                except Exception as e:
+                    info = {"error": type(e).__name__, "domain": domain}
+            cache[cache_key] = info
+            return r.site, dict(info)
+
+        results = await asyncio.gather(*(lookup(r, n, d) for r, n, d in queue))
+
+    for site, info in results:
+        out[site] = info
+    return out
+
+
+def _attach_emails_to_found(
+    grouped: list[tuple[str, list["CheckResult"]]],
+    emails: dict[str, dict],
+) -> int:
+    """Stamp the email-finder result onto each FOUND result's profile
+    dict so JSON export and HTML render pick it up uniformly. Returns
+    the count of profiles with an actual email address attached."""
+    n = 0
+    for _, rs in grouped:
+        for r in rs:
+            if r.exists is not True:
+                continue
+            info = emails.get(r.site)
+            if not info:
+                continue
+            if r.profile is None:
+                r.profile = {}
+            if info.get("email"):
+                r.profile["email"] = info["email"]
+                if info.get("score") is not None:
+                    r.profile["email_score"] = info["score"]
+                if info.get("domain"):
+                    r.profile["email_domain"] = info["domain"]
+                n += 1
+            elif info.get("error"):
+                r.profile["email_error"] = info["error"]
+    return n
+
+
+def _print_emails_section(
+    found: list["CheckResult"],
+    emails: dict[str, dict],
+    color: bool,
+) -> None:
+    """Print a [ EMAILS ] block under the FOUND list with one line per
+    site that produced an email or a per-site error/skip note."""
+    if not emails:
+        return
+    rows = []
+    n_emails = 0
+    for r in found:
+        info = emails.get(r.site)
+        if not info:
+            continue
+        if info.get("email"):
+            n_emails += 1
+            score = info.get("score")
+            tail = f" (score {score})" if score is not None else ""
+            rows.append((r.site, info["email"] + tail, "ok"))
+        elif info.get("error"):
+            rows.append((r.site, f"error: {info['error']}", "err"))
+        elif info.get("skipped"):
+            rows.append((r.site, f"skipped: {info['skipped']}", "dim"))
+        else:
+            rows.append((r.site, "no match", "dim"))
+
+    if not rows:
+        return
+    b, x, dim, g, r_ = (
+        _c(color, "bold"), _c(color, "reset"), _c(color, "dim"),
+        _c(color, "green"), _c(color, "red"),
+    )
+    print(f"\n{b}[ EMAILS ]{x}{b} {n_emails}{x}  {dim}(via Hunter.io){x}")
+    for site, msg, kind in rows:
+        col = g if kind == "ok" else (r_ if kind == "err" else dim)
+        print(f"  {b}{site:<14}{x} {col}{msg}{x}")
+
+
 def _load_identity_hint(path: Path) -> Optional[dict]:
     """Read a previous Phantom JSON report and pull the bits we can use as
     a sanity filter for a fresh name-mode scan: a country (from geo_hint
@@ -1083,9 +1279,9 @@ def _flatten(grouped: list[tuple[str, list[CheckResult]]]):
     return found, unknown, missing_count
 
 
-def _build_json_payload(grouped, raw, elapsed, overall, clusters):
+def _build_json_payload(grouped, raw, elapsed, overall, clusters, emails=None):
     found, unknown, missing_count = _flatten(grouped)
-    return {
+    payload = {
         "input": raw,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "elapsed_seconds": round(elapsed, 2),
@@ -1105,10 +1301,13 @@ def _build_json_payload(grouped, raw, elapsed, overall, clusters):
         "found": [asdict(r) for r in found],
         "unknown": [asdict(r) for r in unknown],
     }
+    if emails:
+        payload["emails"] = emails
+    return payload
 
 
-def export_json(grouped, raw, elapsed, path: Path, overall=None, clusters=None) -> None:
-    payload = _build_json_payload(grouped, raw, elapsed, overall, clusters or [])
+def export_json(grouped, raw, elapsed, path: Path, overall=None, clusters=None, emails=None) -> None:
+    payload = _build_json_payload(grouped, raw, elapsed, overall, clusters or [], emails)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
@@ -1802,6 +2001,15 @@ def _html_card(r: CheckResult, photo_match: Optional[list] = None) -> str:
     if p.get("language_label") or p.get("language"):
         lang = p.get("language_label") or p["language"]
         chips.append(f'🌐 {html.escape(str(lang))}')
+    if p.get("email"):
+        score_part = ""
+        if p.get("email_score") is not None:
+            score_part = f' <span style="opacity:.7">({p["email_score"]})</span>'
+        chips.append(
+            f'✉️ <a href="mailto:{html.escape(p["email"], quote=True)}" '
+            f'style="color:inherit;text-decoration:underline">'
+            f'{html.escape(p["email"])}</a>{score_part}'
+        )
     if p.get("steam_level") is not None:
         chips.append(f'🎮 lvl {p["steam_level"]}')
     if p.get("rating") is not None:
@@ -2175,6 +2383,7 @@ def export_report(
     path: Path,
     overall=None,
     clusters=None,
+    emails=None,
 ) -> None:
     """Dispatch by extension. Defaults to JSON if the suffix is unrecognised."""
     suffix = path.suffix.lower()
@@ -2183,7 +2392,7 @@ def export_report(
     elif suffix == ".md" or suffix == ".markdown" or suffix == ".txt":
         export_markdown(grouped, raw, elapsed, path, overall, clusters)
     else:
-        export_json(grouped, raw, elapsed, path, overall, clusters)
+        export_json(grouped, raw, elapsed, path, overall, clusters, emails)
 
 
 # ---------------------------------------------------------------------------
@@ -2253,9 +2462,22 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
-        "username", nargs="+",
+        "username", nargs="*",
         help="username (or first + last name) to look up. Multi-word inputs "
-             "are joined with a space and treated as a name.",
+             "are joined with a space and treated as a name. Optional when "
+             "using --api.",
+    )
+    p.add_argument(
+        "--api", nargs="+", metavar="ARG",
+        help="manage stored API keys instead of running a scan. "
+             "Subcommands: 'add SERVICE KEY' to save a key, 'list' to show "
+             "configured services. Keys live in ~/.config/phantom/apis.json.",
+    )
+    p.add_argument(
+        "--email", action="store_true",
+        help="for each FOUND profile, query Hunter.io email-finder using "
+             "the profile's display name and the site's domain. Requires a "
+             "Hunter.io key (set with: phantom --api add hunter YOUR_KEY).",
     )
     p.add_argument(
         "--sites", default=str(Path(__file__).with_name("sites.json")),
@@ -2338,10 +2560,28 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
 
+    if args.api:
+        return _run_api_subcommand(args.api)
+
     raw = " ".join(args.username).strip()
     if not raw:
-        print("error: empty username", file=sys.stderr)
+        print(
+            "error: missing username. Pass a username (or first + last name), "
+            "or use --api to manage stored keys.",
+            file=sys.stderr,
+        )
         return 2
+
+    hunter_key: Optional[str] = None
+    if args.email:
+        hunter_key = apis.get("hunter")
+        if not hunter_key:
+            print(
+                "warning: --email requires a Hunter.io API key. Add one with:\n"
+                "  phantom --api add hunter YOUR_KEY\n"
+                "Continuing the scan without email lookup.",
+                file=sys.stderr,
+            )
 
     color = sys.stdout.isatty() and not args.no_color
 
@@ -2446,8 +2686,16 @@ def main(argv: Optional[list[str]] = None) -> int:
                     f"mismatch).",
                     file=sys.stderr,
                 )
+        emails: dict[str, dict] = {}
+        if hunter_key:
+            found_for_email = [
+                r for _, rs in results for r in rs if r.exists is True
+            ]
+            if found_for_email:
+                emails = await discover_emails(found_for_email, hunter_key)
+                _attach_emails_to_found(results, emails)
         if args.no_identity:
-            return results, None, []
+            return results, None, [], emails
         found_dicts: list[dict] = []
         for _, rs in results:
             for r in rs:
@@ -2457,18 +2705,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         # several URL aliases doesn't inflate the photo-match cluster.
         found_dicts = _dedupe_same_site_dicts(found_dicts)
         overall, clusters = await build_overall_and_clusters(found_dicts)
-        return results, overall, clusters
+        return results, overall, clusters, emails
 
     start = time.monotonic()
-    grouped, overall, clusters = asyncio.run(_scan_and_correlate())
+    grouped, overall, clusters, emails = asyncio.run(_scan_and_correlate())
     elapsed = time.monotonic() - start
     cache.save()
 
     if args.as_json:
-        payload = _build_json_payload(grouped, raw, elapsed, overall, clusters)
+        payload = _build_json_payload(grouped, raw, elapsed, overall, clusters, emails)
         print(json.dumps(payload, indent=2))
     elif not args.quiet:
         print_compact(grouped, elapsed, color, args.found_only)
+        if emails:
+            found_for_print, _, _ = _flatten(grouped)
+            _print_emails_section(found_for_print, emails, color)
         if not args.found_only:
             _print_identity_summary(overall, clusters, color)
 
@@ -2494,7 +2745,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         export_path = resolve_export_path(args.export, raw)
         if export_path.parent and not export_path.parent.exists():
             export_path.parent.mkdir(parents=True, exist_ok=True)
-        export_report(grouped, raw, elapsed, export_path, overall, clusters)
+        export_report(grouped, raw, elapsed, export_path, overall, clusters, emails)
         print(
             f"{_c(color,'dim')}Report written to {export_path}{_c(color,'reset')}",
             file=sys.stderr,
