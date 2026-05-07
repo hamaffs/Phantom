@@ -71,8 +71,16 @@ _FACEPP_TIMEOUT = 15.0
 _YANDEX_TIMEOUT = 12.0
 
 # HF model. DINOv2 base gives 768-dim embeddings via feature-extraction.
+# As of late-2024/2025 HF retired the legacy `api-inference.huggingface.co`
+# route for non-warm models and moved to a router that proxies to the
+# `hf-inference` provider (or paid third-party providers). We try the
+# router URL first; the legacy URL is kept as a last-ditch fallback for
+# accounts still hitting the old endpoint.
 _HF_MODEL = "facebook/dinov2-base"
-_HF_URL = f"https://api-inference.huggingface.co/models/{_HF_MODEL}"
+_HF_URLS = (
+    f"https://router.huggingface.co/hf-inference/models/{_HF_MODEL}",
+    f"https://api-inference.huggingface.co/models/{_HF_MODEL}",
+)
 
 # Face++ region. `api-us` is the global endpoint; `api-cn` requires
 # China-mainland account.
@@ -223,15 +231,47 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return sum(x * y for x, y in zip(a, b))  # both pre-normalised
 
 
+async def _hf_post_one(
+    session: aiohttp.ClientSession,
+    url: str,
+    image_bytes: bytes,
+    headers: dict,
+) -> tuple[int, Any]:
+    """Single POST + cold-start retry. Returns (status, body) where body
+    is the parsed JSON on 200 or a short text snippet on error.
+    """
+    async with session.post(
+        url,
+        headers=headers,
+        data=image_bytes,
+        timeout=aiohttp.ClientTimeout(total=_HF_TIMEOUT),
+    ) as resp:
+        if resp.status == 503:
+            await asyncio.sleep(min(20.0, float(resp.headers.get("Retry-After", 5))))
+            async with session.post(
+                url,
+                headers=headers,
+                data=image_bytes,
+                timeout=aiohttp.ClientTimeout(total=_HF_TIMEOUT),
+            ) as resp2:
+                if resp2.status == 200:
+                    return 200, await resp2.json()
+                return resp2.status, (await resp2.text(errors="ignore"))[:200]
+        if resp.status == 200:
+            return 200, await resp.json()
+        return resp.status, (await resp.text(errors="ignore"))[:200]
+
+
 async def _hf_embed_one(
     session: aiohttp.ClientSession,
     image_bytes: bytes,
     token: str,
     diag: dict,
 ) -> Optional[list[float]]:
-    """Call HF Inference API for one image. On failure, record the
-    *first* failure reason into `diag` so the orchestrator can surface
-    a single useful note instead of a silent 0-embeddings result.
+    """Call HF Inference API for one image. Tries the router URL first
+    and falls back to the legacy URL only if the first one returns 404.
+    On terminal failure, records the first failure reason into `diag`
+    so the orchestrator can surface a single useful note.
     """
     headers = {
         "Authorization": f"Bearer {token}",
@@ -243,41 +283,29 @@ async def _hf_embed_one(
         if "first_failure" not in diag:
             diag["first_failure"] = reason
 
-    try:
-        async with session.post(
-            _HF_URL,
-            headers=headers,
-            data=image_bytes,
-            timeout=aiohttp.ClientTimeout(total=_HF_TIMEOUT),
-        ) as resp:
-            if resp.status == 503:
-                await asyncio.sleep(min(20.0, float(resp.headers.get("Retry-After", 5))))
-                async with session.post(
-                    _HF_URL,
-                    headers=headers,
-                    data=image_bytes,
-                    timeout=aiohttp.ClientTimeout(total=_HF_TIMEOUT),
-                ) as resp2:
-                    if resp2.status != 200:
-                        snippet = (await resp2.text(errors="ignore"))[:200]
-                        _record(f"HTTP {resp2.status} after retry: {snippet.strip()}")
-                        return None
-                    raw = await resp2.json()
-            elif resp.status != 200:
-                snippet = (await resp.text(errors="ignore"))[:200]
-                _record(f"HTTP {resp.status}: {snippet.strip()}")
+    last_status = None
+    last_body: Any = None
+    for url in _HF_URLS:
+        try:
+            status, body = await _hf_post_one(session, url, image_bytes, headers)
+        except Exception as e:
+            _record(f"network error: {type(e).__name__}: {e}")
+            return None
+        if status == 200:
+            vec = _flatten_embedding(body)
+            if not vec:
+                _record(f"unexpected payload shape: {str(body)[:200]}")
                 return None
-            else:
-                raw = await resp.json()
-    except Exception as e:
-        _record(f"network error: {type(e).__name__}: {e}")
-        return None
+            return _l2_normalise(vec)
+        last_status, last_body = status, body
+        # Only fall through to the next URL on routing-style failures.
+        # Auth/quota errors apply to every URL.
+        if status not in (404, 405):
+            break
 
-    vec = _flatten_embedding(raw)
-    if not vec:
-        _record(f"unexpected payload shape: {str(raw)[:200]}")
-        return None
-    return _l2_normalise(vec)
+    snippet = last_body if isinstance(last_body, str) else str(last_body)[:200]
+    _record(f"HTTP {last_status}: {snippet.strip()[:200]}")
+    return None
 
 
 async def compute_dino_embeddings(
@@ -457,32 +485,174 @@ async def compute_facepp_pairs(
 # Google Cloud Vision Web Detection (paid, but $300 free credit on new
 # accounts). Add it here when needed.
 
-# Map result-URL hostnames to the platform name + a regex extracting the
-# username from the path. `None` regex = platform identified but no
-# extractable handle from this URL alone.
-_PLATFORM_PATTERNS: list[tuple[str, str, Optional[re.Pattern]]] = [
-    ("instagram.com",       "Instagram", re.compile(r"^/([A-Za-z0-9._]{1,30})/?")),
-    ("twitter.com",         "Twitter",   re.compile(r"^/([A-Za-z0-9_]{1,15})/?")),
-    ("x.com",               "Twitter",   re.compile(r"^/([A-Za-z0-9_]{1,15})/?")),
-    ("tiktok.com",          "TikTok",    re.compile(r"^/@([A-Za-z0-9._]{1,24})/?")),
-    ("threads.net",         "Threads",   re.compile(r"^/@([A-Za-z0-9._]{1,30})/?")),
-    ("facebook.com",        "Facebook",  re.compile(r"^/([A-Za-z0-9.]{1,50})/?")),
-    ("youtube.com",         "YouTube",   re.compile(r"^/@?([A-Za-z0-9._-]{1,30})/?")),
-    ("twitch.tv",           "Twitch",    re.compile(r"^/([A-Za-z0-9_]{1,25})/?")),
-    ("twitchtracker.com",   "Twitch",    re.compile(r"^/([A-Za-z0-9_]{1,25})/?")),
-    ("github.com",          "GitHub",    re.compile(r"^/([A-Za-z0-9-]{1,39})/?")),
-    ("reddit.com",          "Reddit",    re.compile(r"^/(?:user|u)/([A-Za-z0-9_-]{1,20})/?")),
-    ("pinterest.com",       "Pinterest", re.compile(r"^/([A-Za-z0-9_]{1,30})/?")),
-    ("soundcloud.com",      "SoundCloud", re.compile(r"^/([A-Za-z0-9_-]{1,40})/?")),
-    ("vk.com",              "VK",         re.compile(r"^/([A-Za-z0-9_.]{1,32})/?")),
-    ("ok.ru",               "OK.ru",      re.compile(r"^/([A-Za-z0-9._-]{1,40})/?")),
+# Per-platform classifiers. Each handler returns (platform_name, handle)
+# given a URL path; `handle=None` means "looks like the platform but no
+# usable handle from this URL". This is structured per-platform because
+# the URL grammar varies a lot — Pinterest's `/pin/<id>` is a content
+# path, YouTube's `/user/<name>` is a profile but the leading segment
+# is a literal, and so on. Keeping the logic per-platform is clearer
+# than stacking ever-more-baroque regexes.
+
+_HANDLE_RESERVED = frozenset({
+    "home", "explore", "settings", "help", "about", "tv",
+    "search", "categories", "trending", "popular", "ideas",
+    "tag", "tags", "channel", "watch", "shorts", "playlist",
+    "feed", "results", "gaming", "music", "movies", "premium",
+    "account", "user", "users", "u", "p", "pin", "pins",
+    "reel", "reels", "stories", "stories", "live", "browse",
+    "directory", "support", "policies", "terms", "i", "c",
+})
+
+
+def _safe_handle(s: str) -> Optional[str]:
+    h = s.strip("/").lower()
+    if not h or h in _HANDLE_RESERVED:
+        return None
+    return h
+
+
+def _h_instagram(path: str) -> Optional[str]:
+    # /<handle>[/], reject /p/ /reel/ /stories/ /explore/ etc.
+    m = re.match(r"^/(p|reel|reels|stories|explore|tags?)(/|$)", path, re.I)
+    if m:
+        return None
+    m = re.match(r"^/([A-Za-z0-9._]{1,30})/?$", path)
+    return _safe_handle(m.group(1)) if m else None
+
+
+def _h_twitter(path: str) -> Optional[str]:
+    # /<handle>, reject /i/ /search /home /notifications /messages /hashtag
+    m = re.match(r"^/(i|home|search|notifications|messages|hashtag|explore|compose)(/|$)", path, re.I)
+    if m:
+        return None
+    m = re.match(r"^/([A-Za-z0-9_]{1,15})/?$", path)
+    return _safe_handle(m.group(1)) if m else None
+
+
+def _h_tiktok(path: str) -> Optional[str]:
+    # /@handle, reject /tag /discover /music /video etc.
+    m = re.match(r"^/@([A-Za-z0-9._]{1,24})/?$", path)
+    return _safe_handle(m.group(1)) if m else None
+
+
+def _h_threads(path: str) -> Optional[str]:
+    m = re.match(r"^/@([A-Za-z0-9._]{1,30})/?$", path)
+    return _safe_handle(m.group(1)) if m else None
+
+
+def _h_facebook(path: str) -> Optional[str]:
+    # /<handle> or /people/<name>/<id>. Reject /pages/, /groups/, /watch/, /events/
+    m = re.match(r"^/(pages|groups|watch|events|marketplace|gaming|reel|stories|business)(/|$)", path, re.I)
+    if m:
+        return None
+    m = re.match(r"^/([A-Za-z0-9.]{1,50})/?$", path)
+    return _safe_handle(m.group(1)) if m else None
+
+
+def _h_youtube(path: str) -> Optional[str]:
+    # /@handle, /user/<name>, /c/<name>, NOT /channel/UCxxx (that's an opaque ID)
+    # NOT /watch /playlist /shorts /feed /results /channel etc.
+    m = re.match(r"^/@([A-Za-z0-9._-]{1,30})/?", path)
+    if m:
+        return _safe_handle(m.group(1))
+    m = re.match(r"^/(?:user|c)/([A-Za-z0-9._-]{1,30})/?", path, re.I)
+    if m:
+        return _safe_handle(m.group(1))
+    return None
+
+
+def _h_twitch(path: str) -> Optional[str]:
+    m = re.match(r"^/(directory|videos|p|search|moderator)(/|$)", path, re.I)
+    if m:
+        return None
+    m = re.match(r"^/([A-Za-z0-9_]{1,25})/?$", path)
+    return _safe_handle(m.group(1)) if m else None
+
+
+def _h_github(path: str) -> Optional[str]:
+    # /<user> only — no /<user>/<repo>, not really a "found user" URL on
+    # its own. We require the path to be a single segment.
+    m = re.match(r"^/(features|pricing|trending|topics|collections|marketplace|orgs|sponsors|enterprise|notifications|settings|new|login|join|search|contact)(/|$)", path, re.I)
+    if m:
+        return None
+    m = re.match(r"^/([A-Za-z0-9-]{1,39})/?$", path)
+    return _safe_handle(m.group(1)) if m else None
+
+
+def _h_reddit(path: str) -> Optional[str]:
+    m = re.match(r"^/(?:user|u)/([A-Za-z0-9_-]{1,20})/?", path)
+    return _safe_handle(m.group(1)) if m else None
+
+
+def _h_pinterest(path: str) -> Optional[str]:
+    # /<handle>[/<board>] — accept profiles even with trailing board.
+    # Reject /pin/, /ideas/, /search/, /explore/, /board/, /today/.
+    m = re.match(r"^/(pin|pins|ideas|search|explore|board|today|categories|business|video|videos)(/|$)", path, re.I)
+    if m:
+        return None
+    m = re.match(r"^/([A-Za-z0-9_]{1,30})(/|$)", path)
+    return _safe_handle(m.group(1)) if m else None
+
+
+def _h_soundcloud(path: str) -> Optional[str]:
+    # /<handle>[/<track>] — accept profile-with-track URLs.
+    m = re.match(r"^/(search|discover|stream|you|charts|upload|messages|tags?)(/|$)", path, re.I)
+    if m:
+        return None
+    m = re.match(r"^/([A-Za-z0-9_-]{1,40})(/|$)", path)
+    return _safe_handle(m.group(1)) if m else None
+
+
+def _h_vk(path: str) -> Optional[str]:
+    m = re.match(r"^/(feed|search|im|groups|photos|video|music|messages)(/|$)", path, re.I)
+    if m:
+        return None
+    m = re.match(r"^/([A-Za-z0-9_.]{1,32})/?$", path)
+    return _safe_handle(m.group(1)) if m else None
+
+
+def _h_okru(path: str) -> Optional[str]:
+    m = re.match(r"^/(profile)/?(\d+)?$", path, re.I)
+    if m:
+        return None
+    m = re.match(r"^/([A-Za-z0-9._-]{1,40})/?$", path)
+    return _safe_handle(m.group(1)) if m else None
+
+
+# (suffix-match host, platform name, handler).
+_PLATFORM_HANDLERS: list[tuple[str, str, Any]] = [
+    ("instagram.com",     "Instagram",  _h_instagram),
+    ("twitter.com",       "Twitter",    _h_twitter),
+    ("x.com",             "Twitter",    _h_twitter),
+    ("tiktok.com",        "TikTok",     _h_tiktok),
+    ("threads.net",       "Threads",    _h_threads),
+    ("facebook.com",      "Facebook",   _h_facebook),
+    ("youtube.com",       "YouTube",    _h_youtube),
+    ("twitch.tv",         "Twitch",     _h_twitch),
+    ("twitchtracker.com", "Twitch",     _h_twitch),
+    ("github.com",        "GitHub",     _h_github),
+    ("reddit.com",        "Reddit",     _h_reddit),
+    ("pinterest.com",     "Pinterest",  _h_pinterest),
+    ("pinterest.fr",      "Pinterest",  _h_pinterest),
+    ("pinterest.co.uk",   "Pinterest",  _h_pinterest),
+    ("pinterest.de",      "Pinterest",  _h_pinterest),
+    ("soundcloud.com",    "SoundCloud", _h_soundcloud),
+    ("vk.com",            "VK",         _h_vk),
+    ("ok.ru",             "OK.ru",      _h_okru),
 ]
 
-_NON_PROFILE_PATHS = re.compile(
-    r"^/(?:p|reel|stories|status|video|watch|tv|shorts|hashtag|explore|"
-    r"search|tag|category|news|policies|terms|help|about|i/|home|"
-    r"settings|notifications)(?:/|$)",
-    re.IGNORECASE,
+# Hosts that are CDNs, redirect helpers, or otherwise never carry a
+# user-profile URL on the platform. Reject before we even check
+# platform handlers.
+_CDN_HOSTS = (
+    "img.youtube.com", "i.ytimg.com", "ytimg.com",
+    "pbs.twimg.com", "abs.twimg.com",
+    "scontent.cdninstagram.com", "instagram.com.akamaized.net",
+    "cdn.fbsbx.com", "scontent.fbcdn.net",
+    "p16-common-sign.tiktokcdn-eu.com", "tiktokcdn.com",
+    "static-cdn.jtvnw.net",
+    "i.pinimg.com",
+    "i.scdn.co",
 )
 
 
@@ -506,7 +676,13 @@ _RESULT_NOISE_HOSTS = (
 
 
 def _classify_url(url: str) -> tuple[Optional[str], Optional[str]]:
-    """Map a URL to (platform_name, username) when it looks like a profile."""
+    """Map a URL to (platform_name, username) when it looks like a profile.
+
+    Returns (None, None) when the URL is not a public profile on any
+    platform we recognise. Handles per-platform URL grammars (e.g. on
+    YouTube `/user/<name>` extracts `<name>`, not the literal "user";
+    on Pinterest `/pin/<id>` is rejected as content).
+    """
     try:
         parsed = urlparse(url)
     except ValueError:
@@ -514,7 +690,6 @@ def _classify_url(url: str) -> tuple[Optional[str], Optional[str]]:
     host = (parsed.netloc or "").lower()
     path = parsed.path or "/"
 
-    # Strip any leading creds + port.
     if "@" in host:
         host = host.split("@", 1)[1]
     if ":" in host:
@@ -523,27 +698,23 @@ def _classify_url(url: str) -> tuple[Optional[str], Optional[str]]:
     if not host or "." not in host:
         return None, None
 
-    # Yandex chrome / its own infra is never a hit.
+    # Yandex chrome / its own infra.
     for noise in _RESULT_NOISE_HOSTS:
         if _host_matches(host, noise):
             return None, None
 
-    if _NON_PROFILE_PATHS.match(path):
-        return None, None
+    # Image CDNs and asset hosts — never profiles.
+    for cdn in _CDN_HOSTS:
+        if _host_matches(host, cdn):
+            return None, None
 
-    for host_frag, name, pat in _PLATFORM_PATTERNS:
+    for host_frag, name, handler in _PLATFORM_HANDLERS:
         if not _host_matches(host, host_frag):
             continue
-        if pat is None:
-            return name, None
-        m = pat.match(path)
-        if m:
-            handle = m.group(1).lower()
-            # Filter out obvious non-handles.
-            if handle in {"home", "explore", "settings", "help", "about", "tv"}:
-                return name, None
-            return name, handle
-        return name, None
+        handle = handler(path)
+        if handle is None:
+            return None, None
+        return name, handle
     return None, None
 
 
@@ -603,26 +774,14 @@ async def reverse_yandex(
     # whole JSON strings into a single "URL".
     decoded = _html.unescape(body)
 
-    seen: set[tuple[str, Optional[str]]] = set()
+    seen: set[tuple[str, str]] = set()
     out: list[ReverseHit] = []
     for raw_url in _URL_RE.findall(decoded):
         clean = _strip_url_tail(raw_url)
-        # Drop the query string for classification + dedup; profiles
-        # rarely need it and Yandex appends utm_* tracking that breaks
-        # dedup keys.
         no_query = clean.split("?", 1)[0]
         platform, handle = _classify_url(no_query)
-        if not platform:
+        if not platform or not handle:
             continue
-        # Need either an extractable handle or at least a non-trivial
-        # path component. A bare host like `https://github.com` isn't
-        # a hit, it's nav.
-        if not handle:
-            try:
-                if not (urlparse(no_query).path or "").strip("/"):
-                    continue
-            except ValueError:
-                continue
         key = (platform, handle)
         if key in seen:
             continue
