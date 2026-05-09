@@ -1726,11 +1726,11 @@ _HTML_TEMPLATE = """<!doctype html>
     border-radius: 6px;
     padding: 20px;
     display: flex;
-    gap: 14px;
+    gap: 18px;
     border: 1px solid var(--border);
   }}
   .acct .photo {{
-    width: 56px; height: 56px;
+    width: 72px; height: 72px;
     border-radius: 6px;
     flex-shrink: 0;
     background: var(--paper) center/cover no-repeat;
@@ -1740,25 +1740,25 @@ _HTML_TEMPLATE = """<!doctype html>
   }}
   .acct .photo .letter {{
     font-family: 'Instrument Serif', Georgia, serif;
-    font-size: 26px; color: var(--ink);
+    font-size: 34px; color: var(--ink);
     line-height: 1; letter-spacing: -0.02em;
   }}
   .acct .body {{ flex: 1; min-width: 0; display: flex; flex-direction: column; }}
   .acct .display-name {{
     font-family: 'Instrument Serif', Georgia, serif;
-    font-size: 20px; line-height: 1.2;
+    font-size: 22px; line-height: 1.2;
     color: var(--ink); letter-spacing: -0.01em;
     word-break: break-word;
   }}
   .acct .handle {{
     font-family: 'IBM Plex Mono', ui-monospace, monospace;
-    font-size: 13px; color: var(--muted);
+    font-size: 14px; color: var(--muted);
     margin-top: 2px;
     word-break: break-all;
   }}
   .acct .bio {{
-    font-size: 14px; color: var(--muted);
-    margin-top: 8px;
+    font-size: 15px; color: var(--muted);
+    margin-top: 12px;
     line-height: 1.6;
     display: -webkit-box;
     -webkit-line-clamp: 3;
@@ -1771,7 +1771,7 @@ _HTML_TEMPLATE = """<!doctype html>
   }}
   .acct .platform-tag {{
     font-family: 'IBM Plex Mono', ui-monospace, monospace;
-    font-size: 10px; font-weight: 500;
+    font-size: 12px; font-weight: 500;
     text-transform: uppercase; letter-spacing: 0.10em;
     background: var(--paper);
     color: var(--ink);
@@ -1781,7 +1781,7 @@ _HTML_TEMPLATE = """<!doctype html>
   }}
   .acct .url {{
     font-family: 'IBM Plex Mono', ui-monospace, monospace;
-    font-size: 11px; color: var(--muted);
+    font-size: 13px; color: var(--muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     max-width: 60%;
     transition: color 0.15s;
