@@ -22,6 +22,7 @@ import asyncio
 import html
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -1535,529 +1536,435 @@ _HTML_TEMPLATE = """<!doctype html>
 <title>Phantom — {raw_html}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {{
-    --bg: #0b0e15;
-    --bg-elev: #0f131c;
-    --surface: rgba(22, 27, 38, 0.55);
-    --surface-2: rgba(28, 34, 47, 0.65);
-    --surface-strong: rgba(36, 42, 58, 0.75);
-    --border: rgba(255, 255, 255, 0.06);
-    --border-strong: rgba(255, 255, 255, 0.12);
-    --text: #d9dde7;
-    --text-bright: #f3f5fa;
-    --muted: #7a8094;
-    --muted-2: #5a6075;
-    --accent: #7c8cff;
-    --accent-soft: rgba(124, 140, 255, 0.12);
-    --accent-line: rgba(124, 140, 255, 0.28);
-    --accent-glow: rgba(124, 140, 255, 0.18);
-    --teal: #4fd1c5;
-    --amber: #f4b860;
-    --rose: #f08a8a;
+    --paper:    #f5efe2;
+    --paper-2:  #ebe1cd;
+    --ink:      #1a1612;
+    --muted:    #6b5f4d;
+    --rule:     #c4b896;
+    --border:   #d4c9b3;
   }}
   * {{ box-sizing: border-box; }}
-  html, body {{ background: var(--bg); }}
+  html, body {{ background: var(--paper); }}
   body {{
-    margin: 0; color: var(--text);
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "SF Pro Display",
-                 system-ui, "Segoe UI", Roboto, sans-serif;
+    margin: 0; color: var(--ink);
+    font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
     font-size: 14px; line-height: 1.55;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    letter-spacing: -0.005em;
-    background-image:
-      radial-gradient(circle at 18% -10%, rgba(124, 140, 255, 0.10), transparent 45%),
-      radial-gradient(circle at 88% 8%, rgba(167, 139, 250, 0.07), transparent 50%);
-    background-attachment: fixed;
-    background-repeat: no-repeat;
     min-height: 100vh;
   }}
-  a {{ color: var(--accent); text-decoration: none; }}
-  code, .mono {{
-    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  a {{ color: var(--ink); text-decoration: none; }}
+  .serif {{ font-family: 'Instrument Serif', Georgia, 'Times New Roman', serif; }}
+  .mono {{
+    font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-feature-settings: "ss01", "ss02";
   }}
 
-  /* ---------- Header ---------- */
-  header.top {{
-    padding: 56px 56px 28px; position: relative;
+  .page {{
+    max-width: 900px; margin: 0 auto;
+    padding: 42px 38px;
   }}
-  header.top::after {{
-    content: ""; position: absolute; left: 56px; right: 56px; bottom: 0;
-    height: 1px;
-    background: linear-gradient(90deg, transparent,
-      rgba(124, 140, 255, 0.35) 35%, rgba(167, 139, 250, 0.25) 70%, transparent);
+
+  /* -------- Header -------- */
+  header.top {{
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 24px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--ink);
   }}
   .brand {{
     display: inline-flex; align-items: center; gap: 9px;
-    color: var(--muted); font-size: 11.5px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.18em;
-    margin-bottom: 22px;
+    line-height: 1;
   }}
-  .brand .dot {{
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 12px var(--accent), 0 0 4px var(--accent);
+  .brand .ghost {{
+    width: 22px; height: 22px; flex-shrink: 0;
   }}
-  header.top h1 {{
-    margin: 0; font-size: 38px; font-weight: 700;
-    color: var(--text-bright); letter-spacing: -0.025em;
-    line-height: 1.1;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
+  .brand .wordmark {{
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: 30px; color: var(--ink);
+    letter-spacing: -0.01em; line-height: 1;
   }}
-  header.top h1 .at {{ color: var(--muted-2); font-weight: 400; margin-right: 4px; }}
-  header.top .subtitle {{
-    margin-top: 14px; color: var(--muted); font-size: 13.5px;
-    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  .file-meta {{
+    text-align: right;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 11px; color: var(--muted);
+    line-height: 1.6;
+    letter-spacing: 0.02em;
   }}
-  header.top .subtitle .sep {{ color: var(--muted-2); }}
-  header.top .subtitle b {{ color: var(--text); font-weight: 500; }}
+  .file-meta .num {{ color: var(--ink); font-weight: 500; }}
 
-  /* ---------- Stats pills ---------- */
+  /* -------- Section kicker -------- */
+  .kicker {{
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.22em;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }}
+
+  /* -------- Subject of inquiry -------- */
+  section.subject {{
+    margin-top: 30px;
+  }}
+  .subject-row {{
+    display: flex; align-items: center; gap: 26px;
+  }}
+  .portrait {{
+    width: 100px; height: 100px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    background: var(--paper-2) center/cover no-repeat;
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }}
+  .portrait .letter {{
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: 50px; color: var(--ink);
+    line-height: 1; letter-spacing: -0.02em;
+  }}
+  .ident {{ flex: 1; min-width: 0; }}
+  .ident .handle {{
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: 56px; line-height: 1.05;
+    letter-spacing: -0.02em; color: var(--ink);
+    word-break: break-word;
+  }}
+  .ident .name-region {{
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-style: italic;
+    font-size: 22px; line-height: 1.35;
+    color: var(--muted);
+    margin-top: 6px;
+  }}
+
+  /* -------- Stats row -------- */
   .stats {{
-    display: flex; flex-wrap: wrap; gap: 10px;
-    padding: 24px 56px 8px;
+    margin-top: 30px;
+    border-top: 1px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    align-items: center;
   }}
   .stat {{
-    display: inline-flex; align-items: baseline; gap: 9px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    padding: 11px 18px; border-radius: 10px;
-    transition: border-color 200ms ease, background 200ms ease;
+    padding: 22px 18px;
+    position: relative;
+    text-align: left;
   }}
-  .stat:hover {{
-    border-color: var(--border-strong);
-    background: var(--surface-2);
+  .stat + .stat::before {{
+    content: ""; position: absolute; left: 0; top: 14%; bottom: 14%;
+    border-left: 1px dashed var(--rule);
   }}
   .stat .n {{
-    font-size: 21px; font-weight: 700; letter-spacing: -0.02em;
-    color: var(--text-bright);
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: 38px; line-height: 1.05;
+    letter-spacing: -0.02em; color: var(--ink);
   }}
-  .stat .label {{
-    font-size: 11.5px; color: var(--muted); font-weight: 500;
-  }}
-  .stat.found .n {{ color: var(--teal); }}
-  .stat.unknown .n {{ color: var(--amber); }}
-  .stat.missing .n {{ color: var(--rose); }}
-  .stat.identity .n {{ color: var(--accent); }}
-
-  /* ---------- Sections ---------- */
-  section {{ padding: 32px 56px 8px; }}
-  .section-head {{
-    display: flex; align-items: center; gap: 12px;
-    margin-bottom: 18px;
-  }}
-  .section-head h2 {{
-    margin: 0; font-size: 12px; font-weight: 600;
-    color: var(--muted); text-transform: uppercase;
-    letter-spacing: 0.14em;
-  }}
-  .section-head .count {{
-    background: var(--surface-2); color: var(--text);
-    border: 1px solid var(--border);
-    font-size: 11px; font-weight: 600;
-    padding: 2px 8px; border-radius: 6px;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-  }}
-  .section-note {{
-    color: var(--muted); font-size: 12.5px;
-    margin: -8px 0 16px; max-width: 640px;
+  .stat .l {{
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--muted);
+    margin-top: 6px;
   }}
 
-  /* ---------- Identity card ---------- */
-  .id-card {{
-    background: var(--surface);
-    border: 1px solid var(--border);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border-radius: 16px; padding: 26px;
-    margin-bottom: 14px;
-    display: flex; gap: 26px; align-items: flex-start;
+  /* -------- Detail rows -------- */
+  section.details {{
+    margin-top: 30px;
   }}
-  .id-photos {{
-    display: grid; grid-template-columns: repeat(2, 72px);
-    gap: 8px; flex-shrink: 0;
-  }}
-  .photo-thumb {{
-    width: 72px; height: 72px; border-radius: 12px;
-    background: rgba(0,0,0,0.3) center/cover no-repeat;
-    border: 1px solid var(--border-strong);
-  }}
-  .photo-thumb.empty {{
-    display: flex; align-items: center; justify-content: center;
-    color: var(--muted); font-size: 22px;
-    background: linear-gradient(135deg,
-      rgba(124,140,255,0.08), rgba(167,139,250,0.04));
-  }}
-  .id-body {{ flex: 1; min-width: 0; }}
-  .id-head {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}
-  .id-head h3 {{
-    margin: 0; font-size: 22px; font-weight: 700;
-    color: var(--text-bright); letter-spacing: -0.015em;
-  }}
-  .conf {{
-    font-size: 10.5px; padding: 4px 10px; border-radius: 6px;
-    font-weight: 700; letter-spacing: 0.06em;
-    border: 1px solid transparent;
-  }}
-  .conf.high {{
-    background: rgba(79, 209, 197, 0.10); color: var(--teal);
-    border-color: rgba(79, 209, 197, 0.22);
-  }}
-  .conf.med {{
-    background: rgba(244, 184, 96, 0.10); color: var(--amber);
-    border-color: rgba(244, 184, 96, 0.22);
-  }}
-  .conf.low {{
-    background: var(--surface-2); color: var(--muted);
-    border-color: var(--border-strong);
-  }}
-  .id-stats {{
-    display: flex; gap: 28px; margin-top: 18px;
-    padding: 16px 0;
-    border-top: 1px solid var(--border);
-    border-bottom: 1px solid var(--border);
-  }}
-  .id-stats .col {{ flex: 0 1 auto; }}
-  .id-stats .n {{
-    font-size: 19px; font-weight: 700;
-    color: var(--text-bright); letter-spacing: -0.015em;
-  }}
-  .id-stats .l {{
-    font-size: 10.5px; color: var(--muted);
-    margin-top: 2px; text-transform: uppercase;
-    letter-spacing: 0.08em; font-weight: 500;
-  }}
-  .id-facts {{
-    list-style: none; padding: 0; margin: 14px 0 0;
-    font-size: 13px; color: var(--muted);
-  }}
-  .id-facts li {{ margin: 5px 0; }}
-  .id-facts b {{ color: var(--text); font-weight: 500; }}
-  .id-rationale {{
-    margin-top: 12px; font-size: 11.5px;
-    color: var(--muted-2); font-style: italic;
-  }}
-
-  /* ---------- Cards grid ---------- */
-  .grid {{
+  .detail-row {{
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(296px, 1fr));
-    gap: 18px;
+    grid-template-columns: 130px 1fr;
+    gap: 20px;
+    padding: 14px 0;
+    border-bottom: 1px dashed var(--rule);
   }}
-  .card {{
-    background: var(--surface);
+  .detail-row:first-child {{ padding-top: 0; }}
+  .detail-row:last-child {{ border-bottom: 0; padding-bottom: 0; }}
+  .detail-row .lbl {{
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--muted);
+    align-self: center;
+  }}
+  .detail-row .val {{
+    font-size: 14px; color: var(--ink);
+    line-height: 1.5; word-break: break-word;
+    align-self: center;
+  }}
+  .detail-row .val em {{
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-style: italic; color: var(--muted); font-size: 13px;
+    margin-left: 6px;
+  }}
+  .alias-tag {{
+    display: inline-block;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 11px; font-weight: 500;
+    background: var(--paper-2);
+    color: var(--ink);
+    padding: 3px 8px;
+    border-radius: 3px;
+    margin: 2px 4px 2px 0;
     border: 1px solid var(--border);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border-radius: 14px;
-    overflow: hidden;
-    display: flex; flex-direction: column;
-    transition: transform 220ms cubic-bezier(.2,.7,.2,1),
-                border-color 220ms ease,
-                box-shadow 220ms ease;
-  }}
-  .card:hover {{
-    transform: translateY(-3px);
-    border-color: var(--accent-line);
-    box-shadow: 0 14px 40px -10px var(--accent-glow);
-  }}
-  .card a {{ color: inherit; }}
-  .card-head {{
-    position: relative;
-    aspect-ratio: 1 / 1;
-    background: rgba(0, 0, 0, 0.35) center/cover no-repeat;
-    display: flex; align-items: flex-end; justify-content: flex-start;
-  }}
-  .card-head::after {{
-    content: ""; position: absolute; inset: 0;
-    background: linear-gradient(to bottom,
-      transparent 55%, rgba(11, 14, 21, 0.55) 88%, rgba(11, 14, 21, 0.78));
-    pointer-events: none;
-  }}
-  .card-head .badge {{
-    position: absolute; top: 12px; right: 12px;
-    background: rgba(11, 14, 21, 0.62);
-    border: 1px solid var(--border-strong);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    color: var(--text-bright);
-    padding: 5px 11px; border-radius: 7px;
-    font-size: 11px; font-weight: 600;
-    letter-spacing: 0.02em; z-index: 2;
-  }}
-  .card-head .verified {{
-    position: absolute; top: 12px; left: 12px;
-    background: var(--accent-soft); color: var(--accent);
-    border: 1px solid var(--accent-line);
-    backdrop-filter: blur(14px);
-    padding: 4px 9px; border-radius: 6px;
-    font-size: 10px; font-weight: 700;
-    letter-spacing: 0.07em; z-index: 2;
-  }}
-  .card-head .private {{
-    position: absolute; bottom: 12px; left: 12px;
-    background: rgba(244, 184, 96, 0.14); color: var(--amber);
-    border: 1px solid rgba(244, 184, 96, 0.28);
-    backdrop-filter: blur(14px);
-    padding: 4px 9px; border-radius: 6px;
-    font-size: 10px; font-weight: 700;
-    letter-spacing: 0.07em; z-index: 2;
-  }}
-  .card-head .initial {{
-    width: 100%; height: 100%;
-    display: flex; align-items: center; justify-content: center;
-    color: var(--muted); font-size: 60px; font-weight: 600;
-    background: linear-gradient(135deg,
-      rgba(124, 140, 255, 0.08), rgba(167, 139, 250, 0.05));
   }}
 
-  .card-body {{
-    padding: 16px 18px 18px; flex: 1;
-    display: flex; flex-direction: column;
+  /* -------- Discovered accounts -------- */
+  section.accounts {{ margin-top: 30px; }}
+  .accounts-grid {{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
   }}
-  .card-body .name {{
-    font-size: 17px; font-weight: 600;
-    color: var(--text-bright);
-    line-height: 1.3; word-break: break-word;
-    letter-spacing: -0.01em;
+  .acct {{
+    background: var(--paper-2);
+    border-radius: 6px;
+    padding: 16px;
+    display: flex;
+    gap: 14px;
+    border: 1px solid var(--border);
   }}
-  .card-body .handle {{
-    color: var(--muted); font-size: 12.5px;
-    margin-top: 3px;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
+  .acct .photo {{
+    width: 56px; height: 56px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    background: var(--paper) center/cover no-repeat;
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
   }}
-  .card-body .bio {{
-    color: var(--text); font-size: 13px;
-    margin-top: 12px;
-    opacity: 0.9;
+  .acct .photo .letter {{
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: 26px; color: var(--ink);
+    line-height: 1; letter-spacing: -0.02em;
+  }}
+  .acct .body {{ flex: 1; min-width: 0; display: flex; flex-direction: column; }}
+  .acct .display-name {{
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: 18px; line-height: 1.2;
+    color: var(--ink); letter-spacing: -0.01em;
+    word-break: break-word;
+  }}
+  .acct .handle {{
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 11px; color: var(--muted);
+    margin-top: 2px;
+    word-break: break-all;
+  }}
+  .acct .bio {{
+    font-size: 12px; color: var(--muted);
+    margin-top: 8px;
+    line-height: 1.45;
     display: -webkit-box;
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    word-break: break-word;
   }}
-  .card-body .meta-row {{
-    display: flex; flex-wrap: wrap; gap: 6px;
-    margin-top: 12px;
-    font-size: 11.5px; color: var(--muted);
-  }}
-  .card-body .meta-row span {{
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    padding: 3px 9px; border-radius: 6px;
-  }}
-  .card-body .repo-row {{
-    margin-top: 10px; font-size: 11.5px; color: var(--muted);
-    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
-  }}
-  .card-body .repo-row .repo {{
-    background: var(--accent-soft); color: var(--accent);
-    border: 1px solid var(--accent-line);
-    padding: 3px 8px; border-radius: 6px;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 11px;
-  }}
-  .card-body .stats-row {{
-    display: flex; gap: 14px; margin-top: 14px; padding-top: 14px;
-    border-top: 1px solid var(--border);
-  }}
-  .card-body .stats-row .col {{ flex: 1; min-width: 0; }}
-  .card-body .stats-row .n {{
-    font-weight: 700; font-size: 15px;
-    color: var(--text-bright); letter-spacing: -0.01em;
-  }}
-  .card-body .stats-row .l {{
-    font-size: 10px; color: var(--muted);
-    margin-top: 3px; text-transform: uppercase;
-    letter-spacing: 0.08em; font-weight: 500;
-  }}
-  .card-body .footer {{
+  .acct .footer {{
     display: flex; align-items: center; justify-content: space-between;
-    margin-top: auto; padding-top: 16px; gap: 8px;
+    margin-top: 10px; gap: 8px;
   }}
-  .card-body .variant {{
-    display: inline-block; font-size: 11px;
-    background: var(--surface-2); color: var(--muted);
-    padding: 4px 9px; border-radius: 6px;
+  .acct .platform-tag {{
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.10em;
+    background: var(--paper);
+    color: var(--ink);
+    padding: 3px 8px;
+    border-radius: 3px;
     border: 1px solid var(--border);
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
   }}
-  .card-body .open {{
-    font-size: 12px; font-weight: 600;
-    color: var(--accent);
-    background: var(--accent-soft);
-    border: 1px solid var(--accent-line);
-    padding: 6px 13px; border-radius: 7px;
-    transition: background 200ms ease, border-color 200ms ease,
-                transform 200ms ease;
+  .acct .url {{
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 11px; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 60%;
+    transition: color 0.15s;
   }}
-  .card-body .open:hover {{
-    background: rgba(124, 140, 255, 0.20);
-    border-color: rgba(124, 140, 255, 0.45);
-    transform: translateX(2px);
-  }}
+  .acct .url:hover {{ color: var(--ink); }}
+  .acct .url .arrow {{ margin-left: 3px; }}
 
-  .alt-sites-row {{
-    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
-    margin-top: 14px; padding-top: 14px;
-    border-top: 1px solid var(--border);
-  }}
-  .alt-sites-row .multi-badge {{
-    font-size: 10.5px; font-weight: 600;
-    padding: 3px 9px; border-radius: 6px;
-    background: var(--accent-soft); color: var(--accent);
-    border: 1px solid var(--accent-line);
-    letter-spacing: 0.02em;
-  }}
-  .alt-sites-row .alt-site {{
-    font-size: 11px;
-    padding: 3px 9px; border-radius: 6px;
-    background: var(--surface-2); color: var(--text);
+  /* -------- Auxiliary panels (emails / deep / unknowns) -------- */
+  section.aux {{ margin-top: 30px; }}
+  .aux-panel {{
+    background: var(--paper-2);
+    border-radius: 6px;
     border: 1px solid var(--border);
-    transition: border-color 180ms ease, color 180ms ease;
+    padding: 16px 18px;
   }}
-  .alt-sites-row .alt-site:hover {{
-    border-color: var(--accent-line); color: var(--accent);
-  }}
-
-  /* ---------- Unknown table ---------- */
-  .table {{
+  .aux-table {{
     width: 100%; border-collapse: collapse;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border-radius: 12px; overflow: hidden;
+    font-size: 12px;
   }}
-  .table th, .table td {{
-    padding: 13px 18px; text-align: left;
+  .aux-table th, .aux-table td {{
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px dashed var(--rule);
+    vertical-align: top;
+  }}
+  .aux-table tr:last-child td {{ border-bottom: 0; }}
+  .aux-table th {{
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--muted);
     border-bottom: 1px solid var(--border);
-    font-size: 13px;
   }}
-  .table th {{
-    font-weight: 600; font-size: 10.5px;
-    color: var(--muted); text-transform: uppercase;
-    letter-spacing: 0.10em;
-    background: var(--surface-2);
+  .aux-table td {{ color: var(--ink); }}
+  .aux-table .dim {{ color: var(--muted); }}
+  .aux-table .err {{ color: #8a3a2e; }}
+  .aux-table .platform-tag {{
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.10em;
+    background: var(--paper);
+    color: var(--ink);
+    padding: 2px 7px; border-radius: 3px;
+    border: 1px solid var(--border);
   }}
-  .table tr:last-child td {{ border-bottom: 0; }}
-  .table tr:hover td {{ background: rgba(124, 140, 255, 0.03); }}
-  .table a {{ color: var(--accent); }}
-  .table a:hover {{ text-decoration: underline; }}
-  .pill {{
-    font-size: 10.5px; padding: 3px 8px; border-radius: 6px;
-    background: rgba(244, 184, 96, 0.10); color: var(--amber);
-    border: 1px solid rgba(244, 184, 96, 0.20);
-    font-weight: 500;
+  .aux-table a {{ color: var(--ink); text-decoration: underline; text-decoration-color: var(--rule); text-underline-offset: 3px; }}
+  .aux-table a:hover {{ text-decoration-color: var(--ink); }}
+  .aux-notes {{
+    display: flex; flex-wrap: wrap; gap: 6px;
+    margin-bottom: 12px;
+  }}
+  .aux-notes .chip {{
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px; font-weight: 500;
+    background: var(--paper);
+    color: var(--muted);
+    padding: 3px 8px; border-radius: 3px;
+    border: 1px solid var(--border);
+    letter-spacing: 0.04em;
   }}
 
-  /* ---------- Emails section ---------- */
-  .emails-table .ok td {{ color: var(--text); }}
-  .emails-table .err td {{ color: var(--rose); }}
-  .emails-table .dim td {{ color: var(--muted); }}
-  .emails-table td .dim {{ color: var(--muted); }}
-  .emails-table td .err {{ color: var(--rose); }}
-
-  /* ---------- Inconclusive collapsible ---------- */
+  /* -------- Inconclusive collapsible -------- */
   details.unknown-fold {{ margin-top: 4px; }}
   details.unknown-fold > summary {{
     list-style: none; cursor: pointer; user-select: none;
     display: inline-flex; align-items: center; gap: 10px;
-    padding: 9px 16px; border-radius: 8px;
-    background: var(--surface-2); border: 1px solid var(--border);
-    color: var(--text); font-size: 13px; font-weight: 500;
+    padding: 9px 14px; border-radius: 4px;
+    background: var(--paper-2);
+    border: 1px solid var(--border);
+    color: var(--ink); font-size: 12px;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    text-transform: uppercase; letter-spacing: 0.10em;
     transition: background 0.15s, border-color 0.15s;
   }}
   details.unknown-fold > summary::-webkit-details-marker {{ display: none; }}
   details.unknown-fold > summary::before {{
-    content: "▸"; font-size: 11px; color: var(--muted);
+    content: "›"; font-size: 14px; color: var(--muted);
     transition: transform 0.18s ease;
+    line-height: 1;
   }}
   details.unknown-fold[open] > summary::before {{ transform: rotate(90deg); }}
   details.unknown-fold > summary:hover {{
-    background: rgba(124, 140, 255, 0.06); border-color: var(--accent);
+    background: var(--paper); border-color: var(--ink);
   }}
-  details.unknown-fold > .table {{ margin-top: 14px; }}
+  details.unknown-fold > .aux-panel {{ margin-top: 14px; }}
 
-  /* ---------- Footer ---------- */
-  footer {{
-    color: var(--muted); padding: 36px 56px 48px;
-    font-size: 12.5px; margin-top: 24px;
-    border-top: 1px solid var(--border);
+  /* -------- Footer -------- */
+  footer.bottom {{
+    margin-top: 38px;
+    padding-top: 18px;
+    border-top: 1px solid var(--ink);
+    display: flex; justify-content: space-between; gap: 18px;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--muted);
   }}
-  footer .footer-grid {{
-    display: flex; flex-direction: column; gap: 8px;
-  }}
-  footer code {{
-    background: var(--surface-2); border: 1px solid var(--border);
-    padding: 2px 7px; border-radius: 5px;
-    font-size: 11px; color: var(--text);
-  }}
+  footer.bottom a {{ color: var(--muted); }}
+  footer.bottom a:hover {{ color: var(--ink); }}
 
   @media (max-width: 760px) {{
-    header.top {{ padding: 36px 22px 22px; }}
-    header.top::after {{ left: 22px; right: 22px; }}
-    header.top h1 {{ font-size: 26px; }}
-    .stats, section, footer {{ padding-left: 22px; padding-right: 22px; }}
-    .id-card {{ flex-direction: column; align-items: stretch; gap: 16px; padding: 20px; }}
-    .id-photos {{ grid-template-columns: repeat(4, 60px); }}
-    .photo-thumb {{ width: 60px; height: 60px; }}
-    .grid {{ grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }}
+    .page {{ padding: 28px 18px; }}
+    header.top {{ flex-direction: column; gap: 14px; }}
+    .file-meta {{ text-align: left; }}
+    .ident .handle {{ font-size: 40px; }}
+    .ident .name-region {{ font-size: 18px; }}
+    .stats {{ grid-template-columns: repeat(2, 1fr); }}
+    .stat + .stat::before {{ display: none; }}
+    .stat:nth-child(odd) {{ border-right: 1px dashed var(--rule); }}
+    .stat:nth-child(n+3) {{ border-top: 1px dashed var(--rule); }}
+    .detail-row {{ grid-template-columns: 1fr; gap: 6px; }}
+    .accounts-grid {{ grid-template-columns: 1fr; }}
   }}
 </style>
 </head>
 <body>
+<div class="page">
+
 <header class="top">
-  <div class="brand"><span class="dot"></span>Phantom · Intelligence Report</div>
-  <h1><span class="at">@</span>{raw_html}</h1>
-  <div class="subtitle">
-    <span><b>{n_variants}</b> variants tested</span>
-    <span class="sep">·</span>
-    <span>{elapsed:.1f}s scan time</span>
-    <span class="sep">·</span>
-    <span>{generated_at}</span>
+  <div class="brand">
+    <svg class="ghost" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M12 2.4 C6.8 2.4 4 5.8 4 10.6 L4 21.4 L6.6 19.4 L9 21.4 L12 19.4 L15 21.4 L17.4 19.4 L20 21.4 L20 10.6 C20 5.8 17.2 2.4 12 2.4 Z" fill="#1a1612"/>
+      <circle cx="9.5" cy="10.6" r="1.3" fill="#f5efe2"/>
+      <circle cx="14.5" cy="10.6" r="1.3" fill="#f5efe2"/>
+    </svg>
+    <span class="wordmark">Phantom</span>
+  </div>
+  <div class="file-meta">
+    <div>File <span class="num">N° {file_number}</span></div>
+    <div>{generated_date} · {generated_time} UTC</div>
+    <div>Scan time {elapsed:.1f}s</div>
   </div>
 </header>
 
-<div class="stats">
-  <div class="stat found"><span class="n">{n_found}</span><span class="label">Found</span></div>
-  <div class="stat identity"><span class="n">{n_identities}</span><span class="label">Photo matches</span></div>
-  <div class="stat unknown"><span class="n">{n_unknown}</span><span class="label">Inconclusive</span></div>
-  <div class="stat missing"><span class="n">{n_missing}</span><span class="label">Not found</span></div>
-</div>
-
-{identity_section}
-
-<section>
-  <div class="section-head">
-    <h2>Discovered accounts</h2>
-    <span class="count">{n_found}</span>
+<section class="subject">
+  <div class="kicker">Subject of inquiry</div>
+  <div class="subject-row">
+    {subject_portrait}
+    <div class="ident">
+      <div class="handle">@{subject_handle}</div>
+      <div class="name-region">{subject_name_region}</div>
+    </div>
   </div>
-  {found_block}
+</section>
+
+<section class="stats">
+  <div class="stat">
+    <div class="n">{n_found}</div>
+    <div class="l">Confirmed</div>
+  </div>
+  <div class="stat">
+    <div class="n">{n_identities}</div>
+    <div class="l">Photo match</div>
+  </div>
+  <div class="stat">
+    <div class="n">{n_variants}</div>
+    <div class="l">Aliases tested</div>
+  </div>
+  <div class="stat">
+    <div class="n">{n_sites}</div>
+    <div class="l">Sites scanned</div>
+  </div>
+</section>
+
+<section class="details">
+  {detail_rows}
+</section>
+
+<section class="accounts">
+  <div class="kicker">Confirmed presence — {n_found} of {n_total}</div>
+  <div class="accounts-grid">{found_cards}</div>
 </section>
 
 {emails_section}
-
 {deep_section}
+{unknown_section}
 
-<section>
-  <div class="section-head">
-    <h2>Inconclusive</h2>
-    <span class="count">{n_unknown}</span>
-  </div>
-  {unknown_block}
-</section>
-
-<footer>
-  <div class="footer-grid">
-    <div>{n_missing} sites returned a clean not-found result.</div>
-    <div>Variants tested: {variants_html}</div>
-  </div>
+<footer class="bottom">
+  <div>Generated by Phantom</div>
+  <div><a href="https://github.com/hamaffs/Phantom-" target="_blank" rel="noopener">github.com/hamaffs/Phantom-</a></div>
 </footer>
+
+</div>
 </body>
 </html>
 """
@@ -2094,202 +2001,57 @@ def _format_joined(s) -> Optional[str]:
 
 
 def _html_card(r: CheckResult, photo_match: Optional[list] = None) -> str:
-    """Render one FOUND profile as an info-rich card.
+    """Render one FOUND profile as an editorial dossier account card.
 
-    Layout (top → bottom):
-      [photo with site badge / verified / private overlays]
-      display name
-      @username (variant)
-      bio (3 lines max)
-      location · joined chips
-      followers · following · posts · hearts row
-      [variant pill]                     [open profile →]
+    Layout (left to right):
+      [56x56 photo]  display name (Instrument Serif)
+                     @handle (Plex Mono muted)
+                     bio (sans muted, clamped to 3 lines)
+                     [platform tag]               [url ↗]
     """
     p = r.profile or {}
-    target = r.url  # canonical URL for click — see _format_row note
-    site_badge = html.escape(r.site)
+    target = r.url
 
-    # --- header (photo) ---
     photo_url = p.get("photo")
-    initial = (r.site[:1] or "?").upper()
+    initial = (p.get("display_name") or r.variant or r.site or "?")[:1].upper()
     if photo_url:
-        head = (
-            f'<div class="card-head" '
-            f'style="background-image:url(\'{html.escape(photo_url, quote=True)}\')">'
+        photo_html = (
+            f'<div class="photo" style="background-image:url(\'{html.escape(photo_url, quote=True)}\')"></div>'
         )
     else:
-        head = '<div class="card-head"><div class="initial">' + html.escape(initial) + '</div>'
-    head += f'<span class="badge">{site_badge}</span>'
-    if p.get("verified"):
-        head += '<span class="verified">VERIFIED</span>'
-    if p.get("private"):
-        head += '<span class="private">PRIVATE</span>'
-    head += "</div>"
+        photo_html = (
+            f'<div class="photo"><span class="letter">{html.escape(initial)}</span></div>'
+        )
 
-    # --- body ---
     display_name = p.get("display_name") or r.variant or r.site
-    handle_bits = []
-    if r.variant:
-        handle_bits.append(f"@{html.escape(r.variant)}")
-    handle_bits.append(html.escape(r.site))
-    handle = '<div class="handle">' + " · ".join(handle_bits) + '</div>'
-
-    bio_html = ""
-    if p.get("bio"):
-        bio_html = f'<div class="bio">{html.escape(p["bio"])}</div>'
-
-    chips = []
-    if p.get("location"):
-        chips.append(f'📍 {html.escape(p["location"])}')
-    if p.get("hometown") and p.get("hometown") != p.get("location"):
-        chips.append(f'🏠 from {html.escape(p["hometown"])}')
-    if p.get("company"):
-        chips.append(f'🏢 {html.escape(p["company"])}')
-    if p.get("education"):
-        chips.append(f'🎓 {html.escape(p["education"])}')
-    joined = _format_joined(p.get("joined")) or p.get("joined")
-    if joined:
-        chips.append(f'📅 {html.escape(str(joined))}')
-    if p.get("website"):
-        site_url = str(p["website"])
-        href = site_url if site_url.startswith(("http://", "https://")) else f"https://{site_url}"
-        chips.append(
-            f'🔗 <a href="{html.escape(href, quote=True)}" target="_blank" '
-            f'rel="noopener" style="color:inherit;text-decoration:underline">'
-            f'{html.escape(site_url)}</a>'
-        )
-    if p.get("twitter_handle"):
-        chips.append(
-            f'🐦 <a href="https://x.com/{html.escape(p["twitter_handle"], quote=True)}" '
-            f'target="_blank" rel="noopener" style="color:inherit;'
-            f'text-decoration:underline">@{html.escape(p["twitter_handle"])}</a>'
-        )
-    if p.get("language_label") or p.get("language"):
-        lang = p.get("language_label") or p["language"]
-        chips.append(f'🌐 {html.escape(str(lang))}')
-    if p.get("email"):
-        score_part = ""
-        if p.get("email_score") is not None:
-            score_part = f' <span style="opacity:.7">({p["email_score"]})</span>'
-        chips.append(
-            f'✉️ <a href="mailto:{html.escape(p["email"], quote=True)}" '
-            f'style="color:inherit;text-decoration:underline">'
-            f'{html.escape(p["email"])}</a>{score_part}'
-        )
-    if p.get("steam_level") is not None:
-        chips.append(f'🎮 lvl {p["steam_level"]}')
-    if p.get("rating") is not None:
-        chips.append(f'♟️ {p["rating"]}')
-    # Reddit karma: prefer the breakdown over the bare total when we
-    # have it, but always fall back to the aggregate so the chip never
-    # disappears for accounts that only ship a combined value.
-    if p.get("post_karma") is not None or p.get("comment_karma") is not None:
-        if p.get("post_karma") is not None:
-            chips.append(f'⭐ {_format_count(p["post_karma"])} post karma')
-        if p.get("comment_karma") is not None:
-            chips.append(f'💬 {_format_count(p["comment_karma"])} comment karma')
-    elif p.get("karma") is not None:
-        chips.append(f'⭐ {_format_count(p["karma"])} karma')
-    meta_row = ""
-    if chips:
-        meta_row = '<div class="meta-row">' + "".join(
-            f"<span>{c}</span>" for c in chips
-        ) + "</div>"
-
-    # Pinned repos badge row (GitHub).
-    pinned_html = ""
-    if p.get("pinned_repos"):
-        pins = "".join(
-            f'<span class="repo">{html.escape(r)}</span>'
-            for r in p["pinned_repos"][:6]
-        )
-        pinned_html = f'<div class="repo-row">📂 {pins}</div>'
-
-    stats = []
-    if "followers" in p:
-        stats.append(("followers", p["followers"]))
-    if "following" in p:
-        stats.append(("following", p["following"]))
-    if "posts" in p:
-        stats.append(("posts", p["posts"]))
-    if "hearts" in p:
-        stats.append(("hearts", p["hearts"]))
-    if "lists" in p:
-        stats.append(("lists", p["lists"]))
-    if "views" in p:
-        stats.append(("views", p["views"]))
-    if "games" in p:
-        stats.append(("games", p["games"]))
-    stats_row = ""
-    if stats:
-        cells = "".join(
-            f'<div class="col"><div class="n">{html.escape(_format_count(v))}</div>'
-            f'<div class="l">{html.escape(label)}</div></div>'
-            for label, v in stats
-        )
-        stats_row = f'<div class="stats-row">{cells}</div>'
-
-    variant_pill = (
-        f'<span class="variant">{html.escape(r.variant)}</span>' if r.variant else ""
-    )
-    open_link = (
-        f'<a class="open" href="{html.escape(target, quote=True)}" '
-        f'target="_blank" rel="noopener">Open profile →</a>'
+    handle = f"@{r.variant}" if r.variant else r.site
+    bio_html = (
+        f'<div class="bio">{html.escape(p["bio"])}</div>' if p.get("bio") else ""
     )
 
-    # Same-profile aliases: when several URL variants resolved to the
-    # same profile (Facebook accepts `/john.smith` and `/johnsmith` for
-    # the same person), surface them as small chips so the user can see
-    # which patterns matched without each one creating a duplicate card.
-    aliases_html = ""
-    if p.get("aliases"):
-        chips = "".join(
-            f'<span class="alt-site">@{html.escape(a.get("variant") or "")}</span>'
-            for a in p["aliases"][:6]
-        )
-        aliases_html = (
-            '<div class="alt-sites-row">'
-            '<span class="multi-badge">also at</span>'
-            f"{chips}</div>"
-        )
-
-    # Photo-match: small badge + chips linking to the other accounts that
-    # share this profile photo. Each account still renders its own card;
-    # this is just a cross-reference annotation.
-    photo_match_html = ""
-    if photo_match:
-        chips = "".join(
-            f'<a class="alt-site" href="{html.escape(other.url, quote=True)}" '
-            f'target="_blank" rel="noopener">{html.escape(other.site)}</a>'
-            for other in photo_match
-        )
-        photo_match_html = (
-            '<div class="alt-sites-row">'
-            '<span class="multi-badge">📷 same photo as</span>'
-            f"{chips}</div>"
-        )
+    # Truncate URL for visual length while keeping it clickable.
+    visible_url = target
+    if len(visible_url) > 48:
+        visible_url = visible_url[:46] + "…"
 
     body = (
-        '<div class="card-body">'
-        f'<div class="name">{html.escape(display_name)}</div>'
-        f"{handle}"
-        f"{bio_html}"
-        f"{meta_row}"
-        f"{pinned_html}"
-        f"{stats_row}"
-        f"{aliases_html}"
-        f"{photo_match_html}"
-        f'<div class="footer">{variant_pill}{open_link}</div>'
-        "</div>"
+        f'<div class="body">'
+        f'<div class="display-name">{html.escape(display_name)}</div>'
+        f'<div class="handle">{html.escape(handle)}</div>'
+        f'{bio_html}'
+        f'<div class="footer">'
+        f'<span class="platform-tag">{html.escape(r.site)}</span>'
+        f'<a class="url" href="{html.escape(target, quote=True)}" target="_blank" '
+        f'rel="noopener" title="{html.escape(target)}">'
+        f'{html.escape(visible_url)}<span class="arrow">↗</span></a>'
+        f'</div>'
+        f'</div>'
     )
-
-    return f'<div class="card">{head}{body}</div>'
+    return f'<div class="acct">{photo_html}{body}</div>'
 
 
 def _html_emails_section(found: list, emails: dict) -> str:
-    """Per-site Hunter.io results table — discovered addresses,
-    low-confidence drops, errors, and skips. Mirrors the terminal
-    [ EMAILS ] block. Hidden when no emails dict was produced."""
+    """Per-site Hunter.io results — restyled for the editorial dossier."""
     if not emails:
         return ""
     rows: list[str] = []
@@ -2298,78 +2060,58 @@ def _html_emails_section(found: list, emails: dict) -> str:
         info = emails.get(r.site)
         if not info:
             continue
-        site_cell = html.escape(r.site)
+        site_cell = (
+            f'<span class="platform-tag">{html.escape(r.site)}</span>'
+        )
         if info.get("email"):
             n_emails += 1
             email = html.escape(info["email"])
             href = html.escape(info["email"], quote=True)
             score = info.get("score")
             score_part = f' <span class="dim">({score})</span>' if score is not None else ""
-            cell = (
-                f'<a href="mailto:{href}" '
-                f'style="color:inherit;text-decoration:underline">{email}</a>'
-                f'{score_part}'
-            )
-            klass = "ok"
+            cell = f'<a href="mailto:{href}">{email}</a>{score_part}'
         elif info.get("low_confidence"):
             score = info.get("score")
             tail = f" (score {score})" if score is not None else ""
             cell = f'<span class="dim">low confidence{html.escape(tail)}</span>'
-            klass = "dim"
         elif info.get("error"):
             cell = f'<span class="err">error: {html.escape(info["error"])}</span>'
-            klass = "err"
         elif info.get("skipped"):
             cell = f'<span class="dim">skipped: {html.escape(info["skipped"])}</span>'
-            klass = "dim"
         else:
             cell = '<span class="dim">no match</span>'
-            klass = "dim"
-        rows.append(
-            f'<tr class="{klass}"><td>{site_cell}</td><td>{cell}</td></tr>'
-        )
+        rows.append(f'<tr><td>{site_cell}</td><td>{cell}</td></tr>')
     if not rows:
         return ""
     table = (
-        '<table class="table emails-table"><thead><tr>'
+        '<table class="aux-table"><thead><tr>'
         '<th>Site</th><th>Email</th></tr></thead><tbody>'
         + "".join(rows) + '</tbody></table>'
     )
     return (
-        '<section>'
-        '<div class="section-head">'
-        '<h2>Discovered emails</h2>'
-        f'<span class="count">{n_emails}</span>'
-        '</div>'
-        '<p class="section-note">'
-        "Resolved via Hunter.io email-finder using each profile's "
-        "display name and the site's domain. Social platforms are skipped "
-        "because they don't issue user-addressable mailboxes; results "
-        "below score 70 are dropped as low-confidence."
-        f'</p>{table}</section>'
+        '<section class="aux">'
+        f'<div class="kicker">Discovered emails — {n_emails}</div>'
+        f'<div class="aux-panel">{table}</div>'
+        '</section>'
     )
 
 
 def _html_deep_section(found: list, deep) -> str:
-    """Render the deep photo-matching evidence panel: notes (which
-    providers ran) plus reverse-image-search hits surfacing candidate
-    accounts the username scan never reached.
-    """
+    """Deep photo-matching evidence panel — editorial restyle."""
     if deep is None:
         return ""
     notes = list(getattr(deep, "notes", []) or [])
     reverse_hits = getattr(deep, "reverse_hits", {}) or {}
-
     if not notes and not reverse_hits:
         return ""
 
-    note_html = ""
+    notes_html = ""
     if notes:
         chips = "".join(
-            f'<span class="pill">{html.escape(n)}</span> '
+            f'<span class="chip">{html.escape(n)}</span>'
             for n in notes
         )
-        note_html = f'<p class="section-note">{chips}</p>'
+        notes_html = f'<div class="aux-notes">{chips}</div>'
 
     rows: list[str] = []
     total_hits = 0
@@ -2386,265 +2128,270 @@ def _html_deep_section(found: list, deep) -> str:
             total_hits += 1
             site = html.escape(h.site or "?")
             handle = (
-                f'<code>{html.escape(h.username)}</code>'
+                f'<span class="dim">@{html.escape(h.username)}</span>'
                 if h.username else '<span class="dim">—</span>'
             )
             url_safe = html.escape(h.url, quote=True)
-            url_disp = html.escape(h.url)
-            src = html.escape(h.source)
+            url_disp = html.escape(h.url[:54] + "…" if len(h.url) > 56 else h.url)
+            src_tag = html.escape(h.source)
             rows.append(
-                f'<tr><td>{site}</td><td>{handle}</td>'
-                f'<td><a href="{url_safe}" target="_blank" rel="noopener">'
-                f'{url_disp}</a></td>'
-                f'<td><span class="dim">{src} (from {pivot_site})</span></td></tr>'
+                f'<tr><td><span class="platform-tag">{site}</span></td>'
+                f'<td>{handle}</td>'
+                f'<td><a href="{url_safe}" target="_blank" rel="noopener">{url_disp} ↗</a></td>'
+                f'<td><span class="dim">{src_tag} from {pivot_site}</span></td></tr>'
             )
 
     table_html = ""
     if rows:
         table_html = (
-            '<table class="table"><thead><tr>'
+            '<table class="aux-table"><thead><tr>'
             '<th>Site</th><th>Handle</th><th>URL</th><th>Source</th>'
             '</tr></thead><tbody>' + "".join(rows) + '</tbody></table>'
         )
 
-    if not note_html and not table_html:
+    if not notes_html and not table_html:
         return ""
 
     return (
-        '<section>'
-        '<div class="section-head">'
-        '<h2>Deep photo matching</h2>'
-        f'<span class="count">{total_hits}</span>'
-        '</div>'
-        + note_html
-        + ('<p class="section-note">'
-           "Candidate accounts surfaced by reverse image search on the "
-           "strongest cluster's photo. These are unverified — open each "
-           "URL to confirm before treating it as the same person."
-           '</p>' if rows else "")
-        + table_html
-        + '</section>'
+        '<section class="aux">'
+        f'<div class="kicker">Reverse image findings — {total_hits}</div>'
+        '<div class="aux-panel">'
+        + notes_html + table_html +
+        '</div></section>'
     )
 
 
 def _html_unknown_row(r: CheckResult) -> str:
-    target = r.url  # canonical URL for click — see _format_row note
+    target = r.url
     return (
-        '<tr><td>{site}</td>'
-        '<td><a href="{href}" target="_blank" rel="noopener">{url}</a></td>'
-        '<td><span class="pill">{reason}</span></td>'
-        '<td>{variant}</td></tr>'
-    ).format(
-        site=html.escape(r.site),
-        href=html.escape(target, quote=True),
-        url=html.escape(target),
-        reason=html.escape(r.reason or "unknown"),
-        variant=html.escape(r.variant or ""),
+        '<tr>'
+        f'<td><span class="platform-tag">{html.escape(r.site)}</span></td>'
+        f'<td><a href="{html.escape(target, quote=True)}" target="_blank" rel="noopener">'
+        f'{html.escape(target)}</a></td>'
+        f'<td><span class="dim">{html.escape(r.reason or "unknown")}</span></td>'
+        f'<td><span class="dim">{html.escape(r.variant or "")}</span></td>'
+        '</tr>'
     )
 
 
-def _html_identity_card(c, idx: int, kind: str = "cluster") -> str:
-    """One identity panel. `kind` distinguishes the overall aggregate
-    (one big summary across every FOUND) from a photo-matched cluster
-    (a high-confidence "same person on these N sites" group).
+def _pick_subject_photo(overall, clusters, found) -> Optional[str]:
+    """Pick the most representative photo for the dossier hero portrait.
 
-    The shape of the card is the same; only the confidence label
-    changes — overall confidence reflects "how well we know this
-    person", cluster confidence reflects "how sure are we these accounts
-    are the same person".
+    Preference order: largest photo-matched cluster's first photo →
+    overall identity's first photo → first FOUND result with any photo.
     """
-    name = c.display_name or f"Person {idx}"
-    if kind == "overall":
-        if c.confidence >= 0.7:
-            badge = '<span class="conf high">RICH PROFILE</span>'
-        elif c.confidence >= 0.55:
-            badge = '<span class="conf med">PARTIAL PROFILE</span>'
-        else:
-            badge = '<span class="conf low">SPARSE</span>'
-    else:
-        if c.confidence >= 0.85:
-            badge = '<span class="conf high">HIGH CONFIDENCE</span>'
-        elif c.confidence >= 0.6:
-            badge = '<span class="conf med">LIKELY MATCH</span>'
-        else:
-            badge = '<span class="conf low">CANDIDATE</span>'
+    multi = [c for c in (clusters or []) if len(c.member_indexes) > 1]
+    if multi:
+        biggest = max(multi, key=lambda c: len(c.member_indexes))
+        if biggest.photos:
+            return biggest.photos[0]
+    if overall and getattr(overall, "photos", None):
+        return overall.photos[0]
+    for r in found:
+        photo = (r.profile or {}).get("photo")
+        if photo:
+            return photo
+    return None
 
-    photos_html = "".join(
-        f'<div class="photo-thumb" style="background-image:url(\'{html.escape(p, quote=True)}\')"></div>'
-        for p in c.photos
-    ) or '<div class="photo-thumb empty">?</div>'
 
-    stats_pairs: list[tuple[str, str]] = []
-    if c.total_followers is not None:
-        stats_pairs.append(("Followers", _format_count(c.total_followers)))
-    if c.total_following is not None:
-        stats_pairs.append(("Following", _format_count(c.total_following)))
-    if c.total_posts is not None:
-        stats_pairs.append(("Posts", _format_count(c.total_posts)))
+def _subject_handle(raw: str, found) -> str:
+    """Pick a single @handle to display as the subject identifier.
 
-    stats_html = ""
-    if stats_pairs:
-        cells = "".join(
-            f'<div class="col"><div class="n">{html.escape(v)}</div>'
-            f'<div class="l">{html.escape(label)}</div></div>'
-            for label, v in stats_pairs
+    For single-token input that's the input itself. For name-mode input
+    ('first last'), pick the variant that produced the most FOUND
+    accounts — that's the canonical handle the subject actually uses.
+    """
+    raw = raw.strip()
+    if raw and " " not in raw:
+        return raw
+    counts: dict[str, int] = {}
+    for r in found:
+        v = (r.variant or "").strip()
+        if v:
+            counts[v] = counts.get(v, 0) + 1
+    if counts:
+        return max(counts.items(), key=lambda kv: kv[1])[0]
+    return raw.replace(" ", "")
+
+
+def _html_subject_portrait(photo_url: Optional[str], handle: str) -> str:
+    """100×100 portrait — image if available, otherwise solid block with
+    the first letter of the handle in serif."""
+    if photo_url:
+        return (
+            f'<div class="portrait" '
+            f'style="background-image:url(\'{html.escape(photo_url, quote=True)}\')">'
+            f'</div>'
         )
-        stats_html = f'<div class="id-stats">{cells}</div>'
-
-    bits: list[str] = []
-    if c.locations:
-        bits.append(
-            "Location: " + ", ".join(html.escape(x) for x in c.locations)
-        )
-    geo = c.geo_hint
-    if geo and geo.region and geo.region not in c.locations:
-        sig = ", ".join(html.escape(s) for s in (geo.signals or []))
-        bits.append(
-            f"Likely region: <b>{html.escape(geo.region)}</b> "
-            f"<span style='color:var(--muted)'>({sig}, conf {geo.confidence})</span>"
-        )
-    joined = _format_joined(c.joined_oldest)
-    if joined:
-        bits.append(f"Active since {html.escape(joined)}")
-    if c.verified_on:
-        bits.append("Verified on " + ", ".join(html.escape(s) for s in c.verified_on))
-    if c.private_on:
-        bits.append("Private on " + ", ".join(html.escape(s) for s in c.private_on))
-    if c.variants:
-        vstr = ", ".join(html.escape(v) for v in c.variants[:6])
-        if len(c.variants) > 6:
-            vstr += f", … (+{len(c.variants) - 6})"
-        bits.append("Variants: " + vstr)
-    bits.append(
-        "Found on: " + ", ".join(f"<b>{html.escape(s)}</b>" for s in c.sites)
-    )
-    facts_html = (
-        '<ul class="id-facts">'
-        + "".join(f"<li>{b}</li>" for b in bits)
-        + "</ul>"
-    )
-
-    rationale_html = ""
-    if c.rationale:
-        rationale_html = (
-            '<div class="id-rationale">' + " · ".join(
-                html.escape(r) for r in c.rationale
-            ) + "</div>"
-        )
-
+    initial = (handle[:1] or "?").upper()
     return (
-        '<div class="id-card">'
-        f'<div class="id-photos">{photos_html}</div>'
-        '<div class="id-body">'
-        f'<div class="id-head"><h3>{html.escape(name)}</h3>{badge}</div>'
-        f"{stats_html}"
-        f"{facts_html}"
-        f"{rationale_html}"
-        "</div></div>"
+        f'<div class="portrait">'
+        f'<span class="letter">{html.escape(initial)}</span>'
+        f'</div>'
     )
 
 
-def _photo_match_map(found: list, clusters) -> dict[int, list]:
-    """For each FOUND index in a multi-member photo cluster, return the
-    other members of that cluster (so each card can show a small
-    cross-reference to the linked accounts)."""
-    out: dict[int, list] = {}
-    for c in clusters or []:
-        idxs = [i for i in c.member_indexes if 0 <= i < len(found)]
-        if len(idxs) < 2:
-            continue
-        for i in idxs:
-            out[i] = [found[j] for j in idxs if j != i]
-    return out
+def _format_footprint(overall) -> str:
+    """Combine totals (followers / following / posts) into one line."""
+    if overall is None:
+        return "—"
+    bits: list[str] = []
+    if getattr(overall, "total_followers", None) is not None:
+        bits.append(f"{_format_count(overall.total_followers)} followers")
+    if getattr(overall, "total_following", None) is not None:
+        bits.append(f"{_format_count(overall.total_following)} following")
+    if getattr(overall, "total_posts", None) is not None:
+        bits.append(f"{_format_count(overall.total_posts)} posts")
+    return " · ".join(bits) if bits else "—"
+
+
+def _format_region(overall) -> str:
+    """Render region from locations + inferred geo hint."""
+    if overall is None:
+        return "—"
+    parts: list[str] = []
+    locs = list(getattr(overall, "locations", []) or [])
+    if locs:
+        parts.append(", ".join(locs))
+    geo = getattr(overall, "geo_hint", None)
+    if geo and getattr(geo, "region", None) and geo.region not in (locs or []):
+        parts.append(
+            f'<em>likely {html.escape(geo.region)} '
+            f'({html.escape(getattr(geo, "confidence", "low"))})</em>'
+        )
+    return " · ".join(parts) if parts else "—"
+
+
+def _build_detail_rows(overall, found, all_variants: list[str]) -> str:
+    """Render the four detail rows: region, active since, footprint, aliases."""
+    rows: list[tuple[str, str]] = []
+
+    rows.append(("Region", _format_region(overall) or "—"))
+
+    active_since = "—"
+    if overall and getattr(overall, "joined_oldest", None):
+        formatted = _format_joined(overall.joined_oldest)
+        active_since = formatted or html.escape(str(overall.joined_oldest))
+    rows.append(("Active since", active_since))
+
+    rows.append(("Footprint", html.escape(_format_footprint(overall))))
+
+    # Aliases: variants that actually surfaced a FOUND result, plus any
+    # variants tested overall as light/dim chips. Confirmed first.
+    confirmed = sorted({(r.variant or "").strip() for r in found if r.variant})
+    confirmed = [v for v in confirmed if v]
+    tags = "".join(
+        f'<span class="alias-tag">{html.escape(v)}</span>'
+        for v in confirmed
+    )
+    if not tags:
+        tags = "—"
+    rows.append(("Aliases", tags))
+
+    return "".join(
+        f'<div class="detail-row">'
+        f'<div class="lbl">{html.escape(label)}</div>'
+        f'<div class="val">{value}</div>'
+        f'</div>'
+        for label, value in rows
+    )
+
+
+def _html_unknown_section(unknown: list) -> str:
+    """Restyled inconclusive collapsible. Empty string when no unknowns."""
+    if not unknown:
+        return ""
+    rows = "".join(_html_unknown_row(r) for r in unknown)
+    table = (
+        '<table class="aux-table"><thead><tr>'
+        '<th>Site</th><th>URL</th><th>Reason</th><th>Variant</th>'
+        '</tr></thead><tbody>' + rows + '</tbody></table>'
+    )
+    n = len(unknown)
+    plural = "s" if n != 1 else ""
+    return (
+        '<section class="aux">'
+        f'<div class="kicker">Inconclusive — {n}</div>'
+        '<details class="unknown-fold">'
+        f'<summary>Show {n} inconclusive result{plural}</summary>'
+        f'<div class="aux-panel">{table}</div>'
+        '</details>'
+        '</section>'
+    )
 
 
 def export_html(grouped, raw, elapsed, path: Path, overall=None, clusters=None, emails=None, deep_evidence=None) -> None:
     found, unknown, missing_count = _flatten(grouped)
     clusters = clusters or []
     multi = [c for c in clusters if len(c.member_indexes) > 1]
+
+    # --- Subject hero ---
+    subject_handle = _subject_handle(raw, found)
+    portrait_url = _pick_subject_photo(overall, clusters, found)
+    subject_portrait_html = _html_subject_portrait(portrait_url, subject_handle)
+
+    # Italic name · region line under the @handle.
+    nr_bits: list[str] = []
+    if overall and getattr(overall, "display_name", None):
+        nr_bits.append(html.escape(overall.display_name))
+    region_text = ""
+    if overall:
+        if overall.locations:
+            region_text = overall.locations[0]
+        elif getattr(overall, "geo_hint", None) and overall.geo_hint.region:
+            region_text = overall.geo_hint.region
+    if region_text:
+        nr_bits.append(html.escape(region_text))
+    subject_name_region = " · ".join(nr_bits) if nr_bits else "&nbsp;"
+
+    # --- Stats counts ---
+    n_variants = len(grouped)
+    n_sites = len(grouped[0][1]) if grouped and grouped[0][1] else 0
+    n_total = len(found) + len(unknown) + missing_count
+
+    # --- Detail rows + cards ---
+    detail_rows_html = _build_detail_rows(
+        overall, found, [v for v, _ in grouped]
+    )
+    if found:
+        found_cards_html = "".join(_html_card(r) for r in found)
+    else:
+        found_cards_html = (
+            '<div class="acct" style="grid-column:1/-1;justify-content:center">'
+            '<div class="body"><div class="bio">No confirmed accounts.</div></div>'
+            '</div>'
+        )
+
+    # --- Auxiliary panels ---
     emails_section = _html_emails_section(found, emails) if emails else ""
     deep_section = _html_deep_section(found, deep_evidence) if deep_evidence else ""
+    unknown_section_html = _html_unknown_section(unknown)
 
-    # Two identity views, in priority order:
-    #   1. The overall identity card — built from EVERY FOUND result.
-    #      Always shown when there's something to summarise (≥ 1 found).
-    #      This is what surfaces a region for users whose photos don't
-    #      happen to match across platforms.
-    #   2. Photo-matched clusters — secondary "definitely the same
-    #      person" view, only shown when 2+ accounts share a photo.
-    sections: list[str] = []
-    if overall and len(found) >= 1:
-        sections.append(
-            '<section>'
-            '<div class="section-head">'
-            '<h2>Subject overview</h2>'
-            '</div>'
-            + _html_identity_card(overall, 1, kind="overall")
-            + "</section>"
-        )
-    if multi:
-        cards = "".join(
-            _html_identity_card(c, i + 1, kind="cluster")
-            for i, c in enumerate(multi)
-        )
-        sections.append(
-            '<section>'
-            '<div class="section-head">'
-            '<h2>Photo-matched accounts</h2>'
-            f'<span class="count">{len(multi)}</span>'
-            '</div>'
-            '<p class="section-note">'
-            "Profile photos that match perceptually across two or more "
-            "sites — strong evidence the same person owns these accounts."
-            f'</p>{cards}</section>'
-        )
-    identity_section = "".join(sections)
+    # --- File metadata ---
+    now = datetime.now(timezone.utc)
+    file_number = f"{random.randint(1000, 9999)}"
+    generated_date = now.strftime("%b %d, %Y")
+    generated_time = now.strftime("%H:%M")
 
-    if found:
-        match_map = _photo_match_map(found, clusters)
-        found_block = '<div class="grid">' + "".join(
-            _html_card(r, photo_match=match_map.get(i))
-            for i, r in enumerate(found)
-        ) + "</div>"
-    else:
-        found_block = '<p style="color:var(--muted)">No accounts found.</p>'
-
-    if unknown:
-        rows = "".join(_html_unknown_row(r) for r in unknown)
-        unknown_block = (
-            '<details class="unknown-fold">'
-            f'<summary>Show {len(unknown)} inconclusive '
-            f'result{"s" if len(unknown) != 1 else ""}</summary>'
-            '<table class="table"><thead><tr>'
-            "<th>Site</th><th>URL</th><th>Reason</th><th>Variant</th>"
-            "</tr></thead><tbody>" + rows + "</tbody></table>"
-            '</details>'
-        )
-    else:
-        unknown_block = '<p style="color:var(--muted)">No unknowns.</p>'
-
-    variants_html = ", ".join(
-        f"<code>{html.escape(v)}</code>" for v, _ in grouped
-    )
     page = _HTML_TEMPLATE.format(
         raw_html=html.escape(raw),
-        n_variants=len(grouped),
+        file_number=file_number,
+        generated_date=generated_date,
+        generated_time=generated_time,
         elapsed=elapsed,
-        generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        subject_portrait=subject_portrait_html,
+        subject_handle=html.escape(subject_handle),
+        subject_name_region=subject_name_region,
         n_found=len(found),
-        # "Photo matches" is the right label here: counts groups of 2+
-        # accounts that share a profile photo. The overall identity
-        # is always present (when there's anything found) and lives
-        # in its own section.
         n_identities=len(multi),
-        n_unknown=len(unknown),
-        n_missing=missing_count,
-        identity_section=identity_section,
+        n_variants=n_variants,
+        n_sites=n_sites,
+        n_total=n_total,
+        detail_rows=detail_rows_html,
+        found_cards=found_cards_html,
         emails_section=emails_section,
         deep_section=deep_section,
-        found_block=found_block,
-        unknown_block=unknown_block,
-        variants_html=variants_html,
+        unknown_section=unknown_section_html,
     )
     path.write_text(page, encoding="utf-8")
 
