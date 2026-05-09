@@ -1565,7 +1565,7 @@ _HTML_TEMPLATE = """<!doctype html>
 
   .page {{
     max-width: 900px; margin: 0 auto;
-    padding: 42px 38px;
+    padding: 42px 36px;
   }}
 
   /* -------- Header -------- */
@@ -1613,7 +1613,7 @@ _HTML_TEMPLATE = """<!doctype html>
     display: flex; align-items: center; gap: 26px;
   }}
   .portrait {{
-    width: 120px; height: 120px;
+    width: 130px; height: 130px;
     border-radius: 6px;
     flex-shrink: 0;
     background: var(--paper-2) center/cover no-repeat;
@@ -1623,14 +1623,14 @@ _HTML_TEMPLATE = """<!doctype html>
   }}
   .portrait .letter {{
     font-family: 'Instrument Serif', Georgia, serif;
-    font-size: 60px; color: var(--ink);
+    font-size: 66px; color: var(--ink);
     line-height: 1; letter-spacing: -0.02em;
   }}
   .ident {{ flex: 1; min-width: 0; }}
   .ident .handle {{
     font-family: 'Instrument Serif', Georgia, serif;
-    font-size: 72px; line-height: 1.05;
-    letter-spacing: -0.02em; color: var(--ink);
+    font-size: 96px; line-height: 1.04;
+    letter-spacing: -0.03em; color: var(--ink);
     word-break: break-word;
   }}
   .ident .name-region {{
@@ -1661,21 +1661,77 @@ _HTML_TEMPLATE = """<!doctype html>
   }}
   .stat .n {{
     font-family: 'Instrument Serif', Georgia, serif;
-    font-size: 52px; line-height: 1.05;
+    font-size: 56px; line-height: 1.05;
     letter-spacing: -0.02em; color: var(--ink);
   }}
   .stat .l {{
     font-family: 'IBM Plex Mono', ui-monospace, monospace;
-    font-size: 10px; font-weight: 500;
+    font-size: 11px; font-weight: 500;
     text-transform: uppercase; letter-spacing: 0.18em;
     color: var(--muted);
     margin-top: 6px;
   }}
 
-  /* -------- Detail rows -------- */
-  section.details {{
+  /* -------- Photo-match + Subject details combo row -------- */
+  section.combo {{
     margin-top: 30px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+    gap: 28px;
+    align-items: start;
   }}
+  /* When the photo-match column is absent, let subject-details span. */
+  section.combo > :only-child {{ grid-column: 1 / -1; }}
+
+  .photo-match {{
+    background: var(--paper-2);
+    border-radius: 8px;
+    padding: 22px;
+    border: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    min-width: 0;
+  }}
+  .pm-photos {{
+    display: flex; align-items: center; justify-content: center;
+    gap: 16px;
+    margin-top: 4px;
+    margin-bottom: 18px;
+  }}
+  .pm-thumb {{
+    width: 84px; height: 84px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    background: var(--paper) center/cover no-repeat;
+    border: 1px solid var(--border);
+  }}
+  .pm-arrow {{
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 16px;
+    color: var(--muted);
+    line-height: 1;
+  }}
+  .pm-divider {{
+    border-top: 1px dashed var(--rule);
+    padding-top: 12px;
+  }}
+  .pm-meta {{
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.55;
+  }}
+  .pm-meta + .pm-meta {{ margin-top: 4px; }}
+  .pm-site {{ color: var(--ink); font-weight: 400; }}
+
+  /* Right column flat list — no card background; just an offset to
+     visually align its kicker with the card's interior kicker. */
+  .subject-details {{
+    padding-top: 22px;
+    min-width: 0;
+  }}
+  .subject-details > .kicker {{ margin-bottom: 14px; }}
+
+  /* -------- Detail rows -------- */
   .detail-row {{
     display: grid;
     grid-template-columns: 130px 1fr;
@@ -1737,7 +1793,7 @@ _HTML_TEMPLATE = """<!doctype html>
     overflow: hidden;
   }}
   .acct .photo {{
-    width: 72px; height: 72px;
+    width: 64px; height: 64px;
     border-radius: 6px;
     flex-shrink: 0;
     background: var(--paper) center/cover no-repeat;
@@ -1747,7 +1803,7 @@ _HTML_TEMPLATE = """<!doctype html>
   }}
   .acct .photo .letter {{
     font-family: 'Instrument Serif', Georgia, serif;
-    font-size: 34px; color: var(--ink);
+    font-size: 30px; color: var(--ink);
     line-height: 1; letter-spacing: -0.02em;
   }}
   .acct .body {{ flex: 1; min-width: 0; display: flex; flex-direction: column; }}
@@ -1894,12 +1950,17 @@ _HTML_TEMPLATE = """<!doctype html>
     .page {{ padding: 28px 18px; }}
     header.top {{ flex-direction: column; gap: 14px; }}
     .file-meta {{ text-align: left; }}
-    .ident .handle {{ font-size: 40px; }}
-    .ident .name-region {{ font-size: 18px; }}
+    .portrait {{ width: 96px; height: 96px; }}
+    .portrait .letter {{ font-size: 50px; }}
+    .ident .handle {{ font-size: 52px; letter-spacing: -0.025em; }}
+    .ident .name-region {{ font-size: 18px; margin-top: 10px; }}
     .stats {{ grid-template-columns: repeat(2, 1fr); }}
     .stat + .stat::before {{ display: none; }}
     .stat:nth-child(odd) {{ border-right: 1px dashed var(--rule); }}
     .stat:nth-child(n+3) {{ border-top: 1px dashed var(--rule); }}
+    .stat .n {{ font-size: 40px; }}
+    section.combo {{ grid-template-columns: 1fr; gap: 18px; }}
+    .subject-details {{ padding-top: 0; }}
     .detail-row {{ grid-template-columns: 1fr; gap: 6px; }}
     .accounts-grid {{ grid-template-columns: 1fr; }}
   }}
@@ -1954,8 +2015,12 @@ _HTML_TEMPLATE = """<!doctype html>
   </div>
 </section>
 
-<section class="details">
-  {detail_rows}
+<section class="combo">
+  {photo_match_block}
+  <div class="subject-details">
+    <div class="kicker">Subject details</div>
+    {detail_rows}
+  </div>
 </section>
 
 <section class="accounts">
@@ -2305,6 +2370,79 @@ def _build_detail_rows(overall, found, all_variants: list[str]) -> str:
     )
 
 
+def _html_photo_match_card(found, clusters) -> str:
+    """Render the editorial Photo Match card or empty string.
+
+    Picks the highest-confidence photo-matched cluster (must have ≥ 2
+    members) and surfaces two of its photos side by side with a ↔
+    glyph between them, plus the cluster's hamming distance and
+    confidence score below a dashed divider. When no cluster qualifies
+    we return an empty string and CSS lets the right column span the
+    full row.
+    """
+    multi = [c for c in (clusters or []) if len(c.member_indexes) > 1]
+    if not multi:
+        return ""
+    best = max(multi, key=lambda c: getattr(c, "confidence", 0) or 0)
+
+    # Walk the FOUND list once, keep the first 2 (site, photo) pairs
+    # whose site is in this cluster's site set. Indexing the cluster
+    # member dicts directly isn't possible from here — `member_indexes`
+    # references the dedupped found_dicts list at correlation time.
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    cluster_sites = set(getattr(best, "sites", []) or [])
+    for r in found:
+        if r.site in cluster_sites and r.site not in seen:
+            photo = (r.profile or {}).get("photo")
+            if photo:
+                pairs.append((r.site, photo))
+                seen.add(r.site)
+        if len(pairs) >= 2:
+            break
+
+    if len(pairs) < 2:
+        return ""
+
+    site1, photo1 = pairs[0]
+    site2, photo2 = pairs[1]
+
+    # Pull a hamming distance out of the cluster's rationale strings
+    # (the phash matcher records "matching profile photo (hamming=N)").
+    # If the merge came from DINO/Face++ instead, hamming is None and
+    # we drop that part of the metadata line.
+    hamming = None
+    for note in (getattr(best, "rationale", None) or []):
+        m = re.search(r"hamming=(\d+)", note)
+        if m:
+            hamming = int(m.group(1))
+            break
+
+    confidence = getattr(best, "confidence", 0) or 0
+    meta_bits: list[str] = []
+    if hamming is not None:
+        meta_bits.append(f"Hamming distance: {hamming}")
+    meta_bits.append(f"Confidence: {confidence:.2f}")
+    meta_line = " · ".join(meta_bits)
+
+    return (
+        '<aside class="photo-match">'
+        '<div class="kicker">Photo match</div>'
+        '<div class="pm-photos">'
+        f'<div class="pm-thumb" style="background-image:url(\'{html.escape(photo1, quote=True)}\')"></div>'
+        '<div class="pm-arrow">↔</div>'
+        f'<div class="pm-thumb" style="background-image:url(\'{html.escape(photo2, quote=True)}\')"></div>'
+        '</div>'
+        '<div class="pm-divider">'
+        f'<div class="pm-meta">Same profile photo confirmed across '
+        f'<span class="pm-site">{html.escape(site1)}</span> and '
+        f'<span class="pm-site">{html.escape(site2)}</span></div>'
+        f'<div class="pm-meta">{html.escape(meta_line)}</div>'
+        '</div>'
+        '</aside>'
+    )
+
+
 def _html_unknown_section(unknown: list) -> str:
     """Restyled inconclusive collapsible. Empty string when no unknowns."""
     if not unknown:
@@ -2338,25 +2476,20 @@ def export_html(grouped, raw, elapsed, path: Path, overall=None, clusters=None, 
     portrait_url = _pick_subject_photo(overall, clusters, found)
     subject_portrait_html = _html_subject_portrait(portrait_url, subject_handle)
 
-    # Italic name · region line under the @handle.
-    nr_bits: list[str] = []
+    # Italic line under the @handle — display name only. Region is
+    # already exposed in the Subject details rows below, so showing it
+    # twice was redundant.
     if overall and getattr(overall, "display_name", None):
-        nr_bits.append(html.escape(overall.display_name))
-    region_text = ""
-    if overall:
-        if overall.locations:
-            region_text = overall.locations[0]
-        elif getattr(overall, "geo_hint", None) and overall.geo_hint.region:
-            region_text = overall.geo_hint.region
-    if region_text:
-        nr_bits.append(html.escape(region_text))
-    subject_name_region = " · ".join(nr_bits) if nr_bits else "&nbsp;"
+        subject_name_region = html.escape(overall.display_name)
+    else:
+        subject_name_region = "&nbsp;"
 
     # --- Stats counts ---
     n_variants = len(grouped)
     n_sites = len(grouped[0][1]) if grouped and grouped[0][1] else 0
 
-    # --- Detail rows + cards ---
+    # --- Combo section: photo-match card + subject details ---
+    photo_match_block = _html_photo_match_card(found, clusters)
     detail_rows_html = _build_detail_rows(
         overall, found, [v for v, _ in grouped]
     )
@@ -2393,6 +2526,7 @@ def export_html(grouped, raw, elapsed, path: Path, overall=None, clusters=None, 
         n_identities=len(multi),
         n_variants=n_variants,
         n_sites=n_sites,
+        photo_match_block=photo_match_block,
         detail_rows=detail_rows_html,
         found_cards=found_cards_html,
         emails_section=emails_section,
