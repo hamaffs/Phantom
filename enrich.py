@@ -249,43 +249,41 @@ def extract_tiktok(body: str, username: str) -> dict:
 # Instagram
 # ---------------------------------------------------------------------------
 
-# The og:description on a public Instagram profile follows the format:
-#   "1,234 Followers, 567 Following, 89 Posts - See Instagram photos and..."
-_IG_STATS_RE = re.compile(
-    r"([\d,.]+)\s+Followers?,\s+([\d,.]+)\s+Following,\s+([\d,.]+)\s+Posts?",
-    re.IGNORECASE,
-)
-# og:title pattern: "Display Name (@username) • Instagram photos and videos"
-_IG_TITLE_RE = re.compile(
-    r"^(.*?)\s*\(@[^)]+\)\s*[•·]\s*Instagram",
-)
-
-
-def _parse_ig_count(s: str) -> int:
-    return int(s.replace(",", "").replace(".", ""))
-
-
 def extract_instagram(body: str, username: str) -> dict:
-    meta = _meta_map(body)
+    """Instagram: parse the web_profile_info API JSON response.
+
+    The body is the raw JSON from
+    https://i.instagram.com/api/v1/users/web_profile_info/?username={username}
+    which requires the x-ig-app-id header but no login cookie.
+    """
     info: dict = {}
-    title = meta.get("og:title", "")
-    desc = meta.get("og:description", "")
-    if title:
-        m = _IG_TITLE_RE.match(title)
-        if m and m.group(1).strip():
-            info["display_name"] = m.group(1).strip()
-    if desc:
-        m = _IG_STATS_RE.search(desc)
-        if m:
-            info["followers"] = _parse_ig_count(m.group(1))
-            info["following"] = _parse_ig_count(m.group(2))
-            info["posts"] = _parse_ig_count(m.group(3))
-    # The og:image is sometimes empty; only keep non-empty.
-    if meta.get("og:image"):
-        info["photo"] = meta["og:image"]
-    # Bio falls back to the description if it doesn't look like a stats line.
-    if desc and "Followers" not in desc:
-        info["bio"] = desc
+    try:
+        data = json.loads(body)
+    except Exception:
+        return info
+    user = (data.get("data") or {}).get("user")
+    if not isinstance(user, dict) or not user:
+        return info
+    if user.get("full_name"):
+        info["display_name"] = user["full_name"]
+    if user.get("biography"):
+        info["bio"] = user["biography"]
+    photo = user.get("profile_pic_url_hd") or user.get("profile_pic_url") or ""
+    if photo:
+        info["photo"] = photo
+    fc = (user.get("edge_followed_by") or {}).get("count")
+    if fc is not None:
+        info["followers"] = int(fc)
+    fw = (user.get("edge_follow") or {}).get("count")
+    if fw is not None:
+        info["following"] = int(fw)
+    posts = (user.get("edge_owner_to_timeline_media") or {}).get("count")
+    if posts is not None:
+        info["posts"] = int(posts)
+    if user.get("is_verified"):
+        info["verified"] = True
+    if user.get("is_private"):
+        info["private"] = True
     return info
 
 

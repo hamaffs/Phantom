@@ -1,10 +1,10 @@
 # Phantom
 
-Async OSINT username checker. Given a username, Phantom queries 64 curated sites in parallel and reports where that handle exists.
+Async OSINT username checker. Given a username, Phantom queries 63 curated sites in parallel and reports where that handle exists.
 
 Designed for **accuracy first**: a `[ FOUND ]` requires positive evidence (a presence marker in the response body or a clean status code), and any "page exists / user not found" page is correctly classified as MISSING. Bot walls and ambiguous responses become `[   ?   ]` rather than risk a false positive.
 
-- 64 hand-picked sites across dev, social, media, gaming, forum, and other
+- 63 hand-picked sites across dev, social, media, gaming, forum, and other
 - **Variant engine**: one input expands to dozens of plausible handles (separators, number/prefix/suffix variants, smart word splits, blind position-insertion for short tokens, first/last name permutations). Use `--exact` to disable.
 - **Confidence-ranked output**: every FOUND result is scored 0–100 and grouped into three tiers — `[ VERIFIED IDENTITY ]`, `[ LIKELY MATCH ]`, and `[ POSSIBLE IMPOSTOR ]`. Impostors are collapsed by default; use `--show-all` to surface them. The terminal and all export formats include the score on every row.
 - **Exportable reports**: `--export FILE` writes the results to **HTML** (premium intelligence-dashboard layout — Inter + JetBrains Mono, glass surfaces, soft-purple accent, one card per discovered profile), **JSON**, or **Markdown** — format inferred from the file extension.
@@ -36,7 +36,7 @@ phantom <username> --found-only
 
 ```
 $ phantom <username>
-Phantom: trying 33 variants of '<username>' across 64 sites = 2079 requests
+Phantom: trying 33 variants of '<username>' across 63 sites = 2079 requests
 
 [ FOUND ] 9
   GitHub         https://github.com/<username> (http=200)  [<username>]
@@ -67,7 +67,7 @@ phantom/
 ├── enrich.py           # public profile data extractor (display name, bio, photo, stats…)
 ├── identity.py         # cross-platform identity correlation (perceptual photo hashing + name/bio overlap)
 ├── watch.py            # snapshot + diff for --watch mode
-├── sites.json          # 64 site definitions (data, no code)
+├── sites.json          # 63 site definitions (data, no code)
 ├── requirements.txt    # aiohttp, aiodns, brotli, curl_cffi, Pillow, imagehash, opencv-python, playwright
 └── README.md
 ```
@@ -189,7 +189,7 @@ phantom <username> --no-impersonate
 | **SoundCloud** | ✓ | ✓ | ✓ | followers / following / track count | location, verified flag |
 | **Bandcamp** | ✓ (artist name) | — | — | — | genre (from JSON-LD) |
 | **Mixcloud** | ✓ | ✓ | ✓ (mixes = posts) | followers / following / views | city, country |
-| **Spotify** | ✓ | — | — | — | (OpenGraph; user URI confirmed via og:url) |
+| **Spotify** | — | — | — | — | Removed — see note below |
 | **Dribbble** | ✓ | — | — | — | (OpenGraph title only) |
 | **Pastebin / Twitch / Letterboxd / Mastodon / …** | ✓ | ✓ | ✓ | — | (whatever's in `og:*`) |
 
@@ -217,7 +217,8 @@ Every extracted bio also runs through a **language detector** (script-based for 
 | `--watch` | off | Snapshot the FOUND set and diff against the previous run for the same input. Snapshots live in `~/.cache/phantom/snapshots/`. |
 | `--quiet` | off | Suppress the regular scan output. With `--watch`, only the diff is printed (or nothing if there are no changes). Designed for cron. |
 | `--found-only` | off | Print only hits (suppress the `[ ? ]` section). |
-| `--show-all` | off | Include the `[ POSSIBLE IMPOSTOR ]` tier in terminal output (default: show count only). |
+| `--show-all` | off | Include the `[ POSSIBLE IMPOSTOR ]` tier (legacy mode) or list all unrelated clusters individually (cluster mode). |
+| `--no-cluster` | off | Disable identity disambiguation; show the flat three-tier `[ VERIFIED IDENTITY ]` / `[ LIKELY MATCH ]` / `[ POSSIBLE IMPOSTOR ]` output instead. |
 | `--json` | off | Emit JSON to stdout (single object: `input`, `summary`, `found`, `variants`). |
 | `--export FILE` | off | Write a structured report. Format inferred from extension (`.html` / `.json` / `.md` / `.pdf`). |
 | `--dark` | off | Use dark theme for HTML/PDF exports. Mutually exclusive with `--light`. |
@@ -286,6 +287,81 @@ Each line includes a short `reason` tag:
 When the request was redirected, the line shows `→ https://final.example/...`. When `curl_cffi` was used (instead of `aiohttp`), the line is tagged `curl_cffi`.
 
 The summary is printed to stderr; results go to stdout — so `--json` works in pipes. With multiple variants, each variant prints a header (`=== variant ===`) and the trailing summary lists per-variant counts plus a grand total.
+
+## Identity disambiguation
+
+After the scan and confidence scoring, `disambiguation.py` clusters the FOUND results into distinct identity groups — answering *"is this one person or several different people who share the username?"*
+
+This is the most practically useful step in a multi-variant scan. Searching `pewdiepie` returns 40+ accounts; disambiguation separates Felix Kjellberg's verified accounts from the hundreds of squatters who registered the same handle.
+
+### How it works
+
+Each found account becomes a node in a weighted similarity graph. Two accounts get an edge when their signal-weight sum is ≥ 3 ("same person" threshold). [Connected components](https://en.wikipedia.org/wiki/Connected_component_(graph_theory)) of the graph become clusters.
+
+| Signal | Weight | Notes |
+| --- | --- | --- |
+| Photo perceptual hash match | +3 | Computed by identity.py; reused here |
+| Cross-link (bio/website of A contains B's domain) | +3 | Bidirectional |
+| Both verified + display names match | +3 | Only fires when both platforms expose verified badges |
+| Fuzzy display-name match (ratio > 0.85) | +2 | |
+| Same location string | +2 | Normalised; substring overlap counts |
+| Same website URL | +2 | |
+| Same follower-count tier | +2 | Tiers: <100 / 100-1K / 1K-10K / 10K-100K / 100K-1M / 1M+ |
+| Same exact username variant | +1 | |
+| Same bio language | +1 | |
+| Account creation dates within 12 months | +1 | |
+| Same variant AND scores both ≥ 25 AND within 45 pts | +2 | Bridges data-sparse accounts that are clearly the same person |
+| Different verified status (both on verifiable platforms) | −2 | |
+| Follower counts 6+ orders of magnitude apart | −2 | e.g. 110M vs 50 |
+| Contradicting location strings | −2 | |
+| One default avatar, other has real photo | −2 | |
+
+### Cluster labels
+
+After building components, each cluster gets a label based on its highest-scoring member:
+
+| Label | Threshold | Meaning |
+| --- | --- | --- |
+| `primary_identity` | max score ≥ 55 | Highly likely the real person |
+| `secondary_cluster` | max score 40–54 | Credible but uncertain identity group |
+| `low_confidence_cluster` | max score < 40 | Likely squatters, fans, or unrelated people |
+
+The cluster with the highest `max_score` is always preferred for primary. If only one cluster exists (unique username like `hamaffs`), it is always primary.
+
+### Terminal output
+
+The default output groups by identity cluster rather than by confidence tier:
+
+```
+[ PRIMARY IDENTITY ] — PewDiePie
+  10 accounts · region: Japan · max confidence: 100
+  ✓ Verified on TikTok, YouTube
+  Sites: YouTube, TikTok, Twitter, Instagram, ...
+  ▸ youtube.com/@pewdiepie  (score 100, verified)
+  ▸ tiktok.com/@pewdiepie   (score 100, verified)
+  … and 8 more — see --export for full report
+
+[ UNRELATED MATCHES ] 30  (use --show-all to display)
+```
+
+Use `--show-all` to list each unrelated cluster individually. Use `--no-cluster` to fall back to the three-tier `[ VERIFIED IDENTITY ]` / `[ LIKELY MATCH ]` / `[ POSSIBLE IMPOSTOR ]` display.
+
+### Why this differs from flat OSINT tools
+
+Most OSINT username checkers dump every match in a single list sorted by reliability, leaving you to manually decide which accounts belong to the same real person. Phantom's disambiguation:
+
+1. **Groups accounts that provably belong together** (same profile photo across three platforms = definitely same person).
+2. **Separates accounts that look suspicious** (110M followers vs 50 followers on similar platforms = different person).
+3. **Propagates cluster membership to exports** — every found result in JSON/Markdown/HTML carries `identity_id` and `is_primary_identity` so downstream tools can filter on primary vs unrelated.
+4. **Filters subject-overview stats to the primary cluster** — the HTML report's "110M followers" comes only from primary-cluster accounts, not averaged across squatter accounts.
+
+### JSON fields
+
+Every item in the `found` array has two new fields:
+- `identity_id` — integer cluster ID (all accounts with the same ID belong to one identity group)
+- `is_primary_identity` — `true` only for accounts in the primary cluster
+
+The top-level `identity_clusters` array contains one object per cluster with `cluster_id`, `members`, `display_name`, `location`, `max_score`, `label`, and `size`.
 
 ## Variant engine
 
@@ -506,7 +582,7 @@ Sites that were always returning `[   ?   ]` from datacenter IPs (Quora, itch.io
 | Score | Examples | What it means |
 | --- | --- | --- |
 | 90–95 | GitHub, AniList API, Codewars API, Bluesky, Lichess, Last.fm, npm, Mojang, Hashnode, Patreon, YouTube, Roblox, VSCO, Disqus, Imgur API, Linktree, Beacons, Carrd, Dev.to, Keybase, Medium, About.me, Dribbble | Clean status code or strict presence/absence — trust. |
-| 80–89 | Pastebin, Steam, Pinterest, Twitch (mobile), Bandcamp, Kaggle, HackerRank, TikTok, Reddit (old.reddit.com), Telegram, Bio.link, Vimeo, SoundCloud, Mixcloud, Spotify | Generally clean but occasionally flaky. |
+| 80–89 | Pastebin, Steam, Pinterest, Twitch (mobile), Bandcamp, Kaggle, HackerRank, TikTok, Reddit (old.reddit.com), Telegram, Bio.link, Vimeo, SoundCloud, Mixcloud | Generally clean but occasionally flaky. |
 | 70–79 | Threads, VK | Heavy SPA / WAF; correct most of the time. |
 | 50–69 | LinkedIn, Facebook, Ko-fi | Bot walls or SPAs we can't reliably penetrate. Filter out with `--min-reliability 70` if you want only confident hits. |
 
@@ -524,6 +600,10 @@ No code changes are needed — `checker.py` reads everything from `sites.json`.
 - Anti-bot walls behind WAF + IP-reputation will return `[   ?   ]` from datacenter IPs. A residential proxy fixes most; that's intentionally out of scope here.
 - Auth-walled sites (LinkedIn, Reddit, sometimes Pinterest) need a logged-in cookie. Out of scope.
 - No retries on failures — Phantom reports the first response it gets. Re-run if the network was flaky.
+
+### Removed sites
+
+**Spotify** (`open.spotify.com/user/{username}`) was removed in May 2026. Spotify's user-profile URL endpoint stopped reliably returning HTTP 200 for real users — real accounts like the official `spotify` user now get 404, while some usernames return 200 with a "Page not found" body. The `canonical` link tag always echoes back the requested username, making the previous presence-text detection produce false positives on any variant that happens to receive a 200 response. Since there is no reliable signal to distinguish "user exists" from "user does not exist" at this endpoint, Spotify was removed to protect Phantom's zero-false-positive guarantee. If Spotify restores a stable public profile API, it can be re-added.
 
 ## Troubleshooting
 

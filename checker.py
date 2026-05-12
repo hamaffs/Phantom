@@ -37,6 +37,8 @@ from aiohttp import ClientSession, ClientTimeout, TCPConnector
 import apis
 import confidence as _confidence
 from confidence import TIER_VERIFIED, TIER_LIKELY, TIER_IMPOSTOR
+import disambiguation as _disambiguation
+from disambiguation import LABEL_PRIMARY, LABEL_SECONDARY, LABEL_LOW
 from enrich import extract_profile
 from identity import _normalise_country, build_overall_and_clusters
 import photo_deep
@@ -139,6 +141,8 @@ class CheckResult:
     variant: Optional[str] = None   # which generated variant produced this
     score: Optional[int] = None     # confidence score 0–100 (set by confidence.py after scan)
     tier: Optional[str] = None      # 'verified_identity' | 'likely_match' | 'possible_impostor'
+    identity_id: Optional[int] = None        # cluster ID assigned by disambiguation.py
+    is_primary_identity: Optional[bool] = None  # True iff this account's cluster is the primary
 
 
 # ---------------------------------------------------------------------------
@@ -817,28 +821,136 @@ def _print_identity_summary(overall, clusters, color: bool) -> None:
             print(f"  {b}{name}{x} {conf_part} → {sites}")
 
 
+def _format_site_url(r: CheckResult) -> str:
+    """Compact URL for display: strip protocol, trailing slash."""
+    return re.sub(r'^https?://', '', r.url).rstrip('/')
+
+
+def print_clustered(
+    found: list[CheckResult],
+    dis_clusters: list,
+    elapsed: float,
+    color: bool,
+    found_only: bool,
+    show_all: bool,
+    unknown_count: int,
+    missing_count: int,
+    n_variants: int,
+) -> None:
+    """Identity-grouped terminal output (default mode when disambiguation runs)."""
+    g, y, b, x, dim = (
+        _c(color, "green"), _c(color, "yellow"),
+        _c(color, "bold"), _c(color, "reset"), _c(color, "dim"),
+    )
+    r_ = _c(color, "red")
+    accent = _c(color, "yellow")
+
+    # Group clusters by label
+    primary   = [c for c in dis_clusters if c.label == LABEL_PRIMARY]
+    secondary = [c for c in dis_clusters if c.label == LABEL_SECONDARY]
+    low       = [c for c in dis_clusters if c.label == LABEL_LOW]
+
+    def _cluster_rows(cluster, limit: int = 5):
+        """Print member rows for a cluster, capped at *limit*."""
+        show_variant = len(set(r.variant for r in found)) > 1
+        members = sorted(
+            [found[i] for i in cluster.member_indices if i < len(found)],
+            key=lambda r: -(r.score or 0),
+        )
+        for r in members[:limit]:
+            ver = f", {_c(color,'bold')}verified{x}" if (r.profile or {}).get('verified') else ""
+            score_txt = f"(score {r.score}{ver})" if r.score is not None else ""
+            tag = f"  {accent}[{r.variant}]{x}" if show_variant and r.variant else ""
+            print(f"  {dim}▸{x} {_format_site_url(r)}  {dim}{score_txt}{x}{tag}")
+        extra = len(members) - limit
+        if extra > 0:
+            print(f"  {dim}… and {extra} more — see --export for full report{x}")
+
+    # Primary cluster(s)
+    for c in primary:
+        name_part = f" {b}— {c.display_name}{x}" if c.display_name else ""
+        print(f"\n{b}{g}[ PRIMARY IDENTITY ]{x}{name_part}")
+        meta_parts = [f"{c.size} account{'s' if c.size != 1 else ''}"]
+        if c.location:
+            meta_parts.append(f"region: {c.location}")
+        meta_parts.append(f"max confidence: {c.max_score}")
+        print(f"  {dim}" + " · ".join(meta_parts) + x)
+        if c.verified_on:
+            print(f"  {b}✓{x} Verified on " + ", ".join(c.verified_on))
+        sites = sorted({found[i].site for i in c.member_indices if i < len(found)})
+        print(f"  {dim}Sites: {', '.join(sites)}{x}")
+        _cluster_rows(c)
+
+    # Secondary clusters
+    for c in secondary:
+        name_part = f" {b}— {c.display_name}{x}" if c.display_name else ""
+        cnum = f" #{c.cluster_id}" if c.cluster_id > 1 else ""
+        print(f"\n{b}{y}[ SECONDARY CLUSTER{cnum} ]{x}{name_part}")
+        meta_parts = [f"{c.size} account{'s' if c.size != 1 else ''}"]
+        meta_parts.append(f"max confidence: {c.max_score}")
+        print(f"  {dim}" + " · ".join(meta_parts) + x)
+        if c.verified_on:
+            print(f"  {b}✓{x} Verified on " + ", ".join(c.verified_on))
+        _cluster_rows(c, limit=3)
+
+    # Low-confidence / unrelated
+    total_low = sum(c.size for c in low)
+    if total_low:
+        if show_all:
+            for c in low:
+                name_part = f" {b}— {c.display_name}{x}" if c.display_name else ""
+                print(f"\n{b}[ UNRELATED ]{x}{name_part}")
+                _cluster_rows(c, limit=3)
+        else:
+            print(f"\n{b}{y}[ UNRELATED MATCHES ]{x}{b} {total_low}{x}  "
+                  f"{dim}(use --show-all to display){x}")
+
+    if not primary and not secondary and not low:
+        print(f"\n{b}{g}[ FOUND ]{x}{b} 0{x}")
+
+    if not found_only:
+        print(f"\n{b}{y}[   ?   ]{x}{b} {unknown_count}{x}  "
+              f"{dim}(use --export to see details){x}")
+        print(f"{b}{r_}[MISSING]{x}{b} {missing_count}{x}")
+
+    sys.stdout.flush()
+    suffix = f"across {n_variants} variant{'s' if n_variants != 1 else ''}"
+    total = len(found) + unknown_count + missing_count
+    print(f"\n{dim}{total} checks {suffix} in {elapsed:.1f}s{x}", file=sys.stderr)
+
+
 def print_compact(
     grouped: list[tuple[str, list[CheckResult]]],
     elapsed: float,
     color: bool,
     found_only: bool,
     show_all: bool = False,
+    dis_clusters: Optional[list] = None,
 ) -> None:
-    """Three-tier FOUND output: verified / likely / possible-impostor.
+    """Clustered or three-tier FOUND output depending on whether disambiguation ran.
 
-    `grouped` is [(variant, [CheckResult, ...])] — flattened and deduped
-    inside, with each row tagged by which variant produced it.
+    When *dis_clusters* is provided, uses the identity-grouped format.
+    When None (--no-cluster or no results), falls back to the three-tier display.
     """
-    show_variant = len(grouped) > 1
     found, unknown, missing_count = _flatten(grouped)
+    n_variants = len(grouped)
 
+    # --- Clustered mode ---
+    if dis_clusters is not None:
+        print_clustered(
+            found, dis_clusters, elapsed, color, found_only, show_all,
+            len(unknown), missing_count, n_variants,
+        )
+        return
+
+    # --- Legacy three-tier mode (--no-cluster) ---
+    show_variant = n_variants > 1
     g, r_, y, b, x = (
         _c(color, "green"), _c(color, "red"), _c(color, "yellow"),
         _c(color, "bold"), _c(color, "reset"),
     )
     dim = _c(color, "dim")
 
-    # Split by tier (results without scores keep their original flat order).
     scored = any(r.tier is not None for r in found)
     if scored:
         verified  = sorted([r for r in found if r.tier == TIER_VERIFIED],
@@ -847,46 +959,37 @@ def print_compact(
                            key=lambda r: -(r.score or 0))
         impostors = sorted([r for r in found if r.tier == TIER_IMPOSTOR],
                            key=lambda r: -(r.score or 0))
-        # Unscored results (--no-identity path) treated as likely.
         unscored  = [r for r in found if r.tier is None]
         likely    = likely + unscored
     else:
-        # Fallback: show everything as a flat FOUND block.
         verified, likely, impostors = [], found, []
 
     if verified:
         print(f"\n{b}{g}[ VERIFIED IDENTITY ]{x}{b} {len(verified)}{x}")
         for r in verified:
             print(_format_row(r, color, show_variant))
-
     if likely:
         print(f"\n{b}{g}[ LIKELY MATCH ]{x}{b} {len(likely)}{x}")
         for r in likely:
             print(_format_row(r, color, show_variant))
-
     if not verified and not likely and not impostors:
         print(f"\n{b}{g}[ FOUND ]{x}{b} 0{x}")
-
     if impostors:
         if show_all:
             print(f"\n{b}{y}[ POSSIBLE IMPOSTOR ]{x}{b} {len(impostors)}{x}")
             for r in impostors:
                 print(_format_row(r, color, show_variant))
         else:
-            print(
-                f"\n{b}{y}[ POSSIBLE IMPOSTOR ]{x}{b} {len(impostors)}{x}  "
-                f"{dim}(use --show-all to display){x}"
-            )
-
+            print(f"\n{b}{y}[ POSSIBLE IMPOSTOR ]{x}{b} {len(impostors)}{x}  "
+                  f"{dim}(use --show-all to display){x}")
     if not found_only:
         print(f"\n{b}{y}[   ?   ]{x}{b} {len(unknown)}{x}  "
               f"{dim}(use --export to see details){x}")
         print(f"{b}{r_}[MISSING]{x}{b} {missing_count}{x}")
 
-    sys.stdout.flush()  # noqa: F841
-    total = len(found) + len(unknown) + missing_count
-    n_variants = len(grouped)
+    sys.stdout.flush()
     suffix = f"across {n_variants} variant{'s' if n_variants != 1 else ''}"
+    total = len(found) + len(unknown) + missing_count
     print(f"\n{dim}{total} checks {suffix} in {elapsed:.1f}s{x}", file=sys.stderr)
 
 
@@ -1408,7 +1511,7 @@ def _deep_evidence_to_dict(deep) -> Optional[dict]:
     }
 
 
-def _build_json_payload(grouped, raw, elapsed, overall, clusters, emails=None, deep_evidence=None):
+def _build_json_payload(grouped, raw, elapsed, overall, clusters, emails=None, deep_evidence=None, dis_clusters=None):
     found, unknown, missing_count = _flatten(grouped)
     payload = {
         "input": raw,
@@ -1433,11 +1536,13 @@ def _build_json_payload(grouped, raw, elapsed, overall, clusters, emails=None, d
         payload["emails"] = emails
     if deep_evidence is not None:
         payload["photo_deep"] = _deep_evidence_to_dict(deep_evidence)
+    if dis_clusters is not None:
+        payload["identity_clusters"] = [c.to_dict() for c in dis_clusters]
     return payload
 
 
-def export_json(grouped, raw, elapsed, path: Path, overall=None, clusters=None, emails=None, deep_evidence=None) -> None:
-    payload = _build_json_payload(grouped, raw, elapsed, overall, clusters or [], emails, deep_evidence)
+def export_json(grouped, raw, elapsed, path: Path, overall=None, clusters=None, emails=None, deep_evidence=None, dis_clusters=None) -> None:
+    payload = _build_json_payload(grouped, raw, elapsed, overall, clusters or [], emails, deep_evidence, dis_clusters=dis_clusters)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
@@ -1475,7 +1580,7 @@ def _md_identity_block(c, header: str) -> list[str]:
     return lines
 
 
-def export_markdown(grouped, raw, elapsed, path: Path, overall=None, clusters=None) -> None:
+def export_markdown(grouped, raw, elapsed, path: Path, overall=None, clusters=None, dis_clusters=None) -> None:
     found, unknown, missing_count = _flatten(grouped)
     clusters = clusters or []
     multi = [c for c in clusters if len(c.member_indexes) > 1]
@@ -1486,53 +1591,58 @@ def export_markdown(grouped, raw, elapsed, path: Path, overall=None, clusters=No
         f"_Generated {ts} — {len(grouped)} variant(s) in {elapsed:.1f}s_",
         "",
         f"- **Found**: {len(found)}",
-        f"- **Photo-matched accounts**: {len(multi)}",
         f"- **Unknown**: {len(unknown)}",
         f"- **Missing**: {missing_count}",
         "",
     ]
     if overall and len(found) >= 2:
         lines += _md_identity_block(overall, "## Overall identity")
-    if multi:
-        lines += [f"## Photo-matched accounts ({len(multi)})", ""]
-        for i, c in enumerate(multi, 1):
-            lines += _md_identity_block(
-                c, f"### Match {i}: {c.display_name or '(no name)'}"
+
+    def _md_rows(rs: list) -> list[str]:
+        out = []
+        for r in rs:
+            tag = f" — `{r.variant}`" if r.variant else ""
+            score_tag = f" (score {r.score})" if r.score is not None else ""
+            cid_tag = f" [cluster {r.identity_id}]" if r.identity_id is not None else ""
+            out.append(f"- [{r.site}]({r.url}){tag}{score_tag}{cid_tag}")
+        return out
+
+    if dis_clusters:
+        # Group by identity cluster.
+        for c in dis_clusters:
+            label_map = {LABEL_PRIMARY: "Primary identity",
+                         LABEL_SECONDARY: "Secondary cluster",
+                         LABEL_LOW: "Unrelated matches"}
+            heading = label_map.get(c.label, c.label)
+            name_part = f" — {c.display_name}" if c.display_name else ""
+            lines += [f"## {heading}{name_part} ({c.size} accounts)", ""]
+            members = sorted(
+                [found[i] for i in c.member_indices if i < len(found)],
+                key=lambda r: -(r.score or 0),
             )
-    # Group by tier if scores were computed.
-    scored = any(r.tier is not None for r in found)
-    if scored and found:
-        v = sorted([r for r in found if r.tier == TIER_VERIFIED], key=lambda r: -(r.score or 0))
-        l = sorted([r for r in found if r.tier == TIER_LIKELY],   key=lambda r: -(r.score or 0))
-        imp = sorted([r for r in found if r.tier == TIER_IMPOSTOR], key=lambda r: -(r.score or 0))
-        l += [r for r in found if r.tier is None]
-
-        def _md_rows(rs: list) -> list[str]:
-            out = []
-            for r in rs:
-                tag = f" — `{r.variant}`" if r.variant else ""
-                score_tag = f" (score {r.score})" if r.score is not None else ""
-                out.append(f"- [{r.site}]({r.url}){tag}{score_tag}")
-            return out
-
-        if v:
-            lines += [f"## Verified identity ({len(v)})", ""] + _md_rows(v) + [""]
-        if l:
-            lines += [f"## Likely match ({len(l)})", ""] + _md_rows(l) + [""]
-        if imp:
-            lines += [f"## Possible impostor ({len(imp)})", ""] + _md_rows(imp) + [""]
+            lines += _md_rows(members) + [""]
     else:
-        lines += [f"## Found ({len(found)})", ""]
-        if found:
-            for r in found:
-                tag = f" — `{r.variant}`" if r.variant else ""
-                score_tag = f" (score {r.score})" if r.score is not None else ""
-                lines.append(f"- [{r.site}]({r.url}){tag}{score_tag}")
+        scored = any(r.tier is not None for r in found)
+        if scored and found:
+            v = sorted([r for r in found if r.tier == TIER_VERIFIED], key=lambda r: -(r.score or 0))
+            l = sorted([r for r in found if r.tier == TIER_LIKELY],   key=lambda r: -(r.score or 0))
+            imp = sorted([r for r in found if r.tier == TIER_IMPOSTOR], key=lambda r: -(r.score or 0))
+            l += [r for r in found if r.tier is None]
+            if v:
+                lines += [f"## Verified identity ({len(v)})", ""] + _md_rows(v) + [""]
+            if l:
+                lines += [f"## Likely match ({len(l)})", ""] + _md_rows(l) + [""]
+            if imp:
+                lines += [f"## Possible impostor ({len(imp)})", ""] + _md_rows(imp) + [""]
         else:
-            lines.append("_None._")
-        lines.append("")
+            lines += [f"## Found ({len(found)})", ""]
+            if found:
+                lines += _md_rows(found)
+            else:
+                lines.append("_None._")
+            lines.append("")
 
-    lines += [f"## Missing", "", f"{missing_count} sites cleanly returned not-found."]
+    lines += ["## Missing", "", f"{missing_count} sites cleanly returned not-found."]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -1826,6 +1936,41 @@ _HTML_TEMPLATE = """<!doctype html>
 
   /* -------- Discovered accounts -------- */
   section.accounts {{ margin-top: 30px; }}
+
+  /* -------- Identity cluster grouping -------- */
+  .cluster-group {{ margin-bottom: 26px; }}
+  .cluster-group:last-child {{ margin-bottom: 0; }}
+  .cluster-header {{
+    display: flex; align-items: baseline; gap: 10px;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }}
+  .cluster-label {{
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    padding: 2px 7px; border-radius: 3px;
+    border: 1px solid var(--border);
+  }}
+  .cluster-label-primary {{
+    color: var(--tier-verified); border-color: var(--tier-verified);
+  }}
+  .cluster-label-secondary {{
+    color: var(--muted); border-color: var(--border);
+  }}
+  .cluster-label-low {{
+    color: var(--muted); border-color: var(--border); opacity: 0.6;
+  }}
+  .cluster-name {{
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: 17px; color: var(--ink); flex: 1;
+  }}
+  .cluster-meta {{
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 10px; color: var(--muted); white-space: nowrap;
+  }}
+
   .accounts-grid {{
     display: grid;
     /* minmax(0, 1fr) — without it, `1fr` resolves to minmax(auto, 1fr),
@@ -2701,20 +2846,101 @@ def _html_unknown_section(unknown: list) -> str:
     )
 
 
-def export_html(grouped, raw, elapsed, path: Path, overall=None, clusters=None, emails=None, deep_evidence=None, face_map=None, dark=False, include_toggle=True) -> None:
+def _html_cluster_section(found: list, dis_clusters: list) -> str:
+    """Build the found_section HTML grouped by identity cluster."""
+    parts: list[str] = []
+
+    LABEL_MAP = {
+        LABEL_PRIMARY:   ("cluster-label-primary",   "Primary Identity"),
+        LABEL_SECONDARY: ("cluster-label-secondary", "Secondary Cluster"),
+        LABEL_LOW:       ("cluster-label-low",        "Unrelated Matches"),
+    }
+
+    primary_and_secondary = [c for c in dis_clusters
+                             if c.label in (LABEL_PRIMARY, LABEL_SECONDARY)]
+    low_clusters = [c for c in dis_clusters if c.label == LABEL_LOW]
+
+    for c in primary_and_secondary:
+        css_cls, label_text = LABEL_MAP.get(c.label, ("cluster-label-low", c.label))
+        meta_parts = [f"{c.size} account{'s' if c.size != 1 else ''}"]
+        if c.location:
+            meta_parts.append(html.escape(c.location))
+        name_html = (
+            f'<span class="cluster-name">{html.escape(c.display_name)}</span>'
+            if c.display_name else ""
+        )
+        header = (
+            f'<div class="cluster-header">'
+            f'<span class="cluster-label {css_cls}">{label_text}</span>'
+            f'{name_html}'
+            f'<span class="cluster-meta">{html.escape(" · ".join(meta_parts))}</span>'
+            f'</div>'
+        )
+        members = [found[i] for i in c.member_indices if i < len(found)]
+        # Sort: verified-tier first, then by score desc
+        members.sort(key=lambda r: (
+            0 if r.tier == TIER_VERIFIED else 1,
+            -(r.score or 0),
+        ))
+        cards_html = "".join(
+            _html_card(r, tier=TIER_VERIFIED if r.tier == TIER_VERIFIED else None)
+            for r in members
+        )
+        parts.append(
+            f'<div class="cluster-group">'
+            f'{header}'
+            f'<div class="accounts-grid">{cards_html}</div>'
+            f'</div>'
+        )
+
+    # Low-confidence clusters go in a collapsible
+    if low_clusters:
+        total_low = sum(c.size for c in low_clusters)
+        inner_html = ""
+        for c in low_clusters:
+            members = [found[i] for i in c.member_indices if i < len(found)]
+            inner_html += "".join(_html_card(r) for r in members)
+        parts.append(
+            f'<details class="unknown-fold" style="margin-top:18px">'
+            f'<summary>Unrelated matches ({total_low})</summary>'
+            f'<div class="aux-panel" style="margin-top:14px">'
+            f'<div class="accounts-grid">{inner_html}</div>'
+            f'</div></details>'
+        )
+
+    return "\n".join(parts) if parts else (
+        '<div class="accounts-grid">'
+        '<div class="acct" style="grid-column:1/-1;justify-content:center">'
+        '<div class="body"><div class="bio">No confirmed accounts.</div></div>'
+        '</div></div>'
+    )
+
+
+def export_html(grouped, raw, elapsed, path: Path, overall=None, clusters=None, emails=None, deep_evidence=None, face_map=None, dark=False, include_toggle=True, dis_clusters=None) -> None:
     found, _, missing_count = _flatten(grouped)
     clusters = clusters or []
     multi = [c for c in clusters if len(c.member_indexes) > 1]
 
+    # When disambiguation has run, use primary-cluster members for the subject
+    # overview so stats reflect the real person, not all matched accounts.
+    primary_cluster = None
+    if dis_clusters:
+        primary_cluster = next(
+            (c for c in dis_clusters if c.label == LABEL_PRIMARY), None
+        )
+    if primary_cluster:
+        primary_found = [found[i] for i in primary_cluster.member_indices if i < len(found)]
+    else:
+        primary_found = found
+
     # --- Subject hero ---
-    subject_handle = _subject_handle(raw, found)
-    portrait_url = _pick_subject_photo(overall, clusters, found, face_map)
+    subject_handle = _subject_handle(raw, primary_found)
+    portrait_url = _pick_subject_photo(overall, clusters, primary_found, face_map)
     subject_portrait_html = _html_subject_portrait(portrait_url, subject_handle)
 
-    # Italic line under the @handle — display name only. Region is
-    # already exposed in the Subject details rows below, so showing it
-    # twice was redundant.
-    if overall and getattr(overall, "display_name", None):
+    if primary_cluster and primary_cluster.display_name:
+        subject_name_region = html.escape(primary_cluster.display_name)
+    elif overall and getattr(overall, "display_name", None):
         subject_name_region = html.escape(overall.display_name)
     else:
         subject_name_region = "&nbsp;"
@@ -2723,40 +2949,39 @@ def export_html(grouped, raw, elapsed, path: Path, overall=None, clusters=None, 
     n_variants = len(grouped)
     n_sites = len(grouped[0][1]) if grouped and grouped[0][1] else 0
 
-    # --- Combo section: photo-match card + subject details ---
-    photo_match_block = _html_photo_match_card(found, clusters)
+    # --- Combo section: photo-match card + subject details (primary only) ---
+    photo_match_block = _html_photo_match_card(primary_found, clusters)
     detail_rows_html = _build_detail_rows(
-        overall, found, [v for v, _ in grouped]
+        overall, primary_found, [v for v, _ in grouped]
     )
-    # --- Account cards grouped by confidence tier ---
+
+    # --- Account cards: cluster-grouped or tier-grouped ---
     if found:
-        scored_html = any(r.tier is not None for r in found)
-        if scored_html:
-            v_cards = [r for r in found if r.tier == TIER_VERIFIED]
-            l_cards = [r for r in found if r.tier == TIER_LIKELY]
-            i_cards = [r for r in found if r.tier == TIER_IMPOSTOR]
-            # Unscored (--no-identity) treated as likely.
-            l_cards += [r for r in found if r.tier is None]
+        if dis_clusters:
+            found_section_html = _html_cluster_section(found, dis_clusters)
         else:
-            v_cards, l_cards, i_cards = [], found, []
-
-        # Primary grid: verified (with dot) + likely (no indicator).
-        primary_html = (
-            "".join(_html_card(r, tier=TIER_VERIFIED) for r in v_cards)
-            + "".join(_html_card(r) for r in l_cards)
-        )
-        found_section_html = f'<div class="accounts-grid">{primary_html}</div>'
-
-        if i_cards:
-            impostor_inner = "".join(_html_card(r) for r in i_cards)
-            found_section_html += (
-                '<details class="unknown-fold" style="margin-top:18px">'
-                f'<summary>Possible impostors ({len(i_cards)})</summary>'
-                '<div class="aux-panel" style="margin-top:14px">'
-                f'<div class="accounts-grid">{impostor_inner}</div>'
-                '</div>'
-                '</details>'
+            scored_html = any(r.tier is not None for r in found)
+            if scored_html:
+                v_cards = [r for r in found if r.tier == TIER_VERIFIED]
+                l_cards = [r for r in found if r.tier == TIER_LIKELY]
+                i_cards = [r for r in found if r.tier == TIER_IMPOSTOR]
+                l_cards += [r for r in found if r.tier is None]
+            else:
+                v_cards, l_cards, i_cards = [], found, []
+            primary_html = (
+                "".join(_html_card(r, tier=TIER_VERIFIED) for r in v_cards)
+                + "".join(_html_card(r) for r in l_cards)
             )
+            found_section_html = f'<div class="accounts-grid">{primary_html}</div>'
+            if i_cards:
+                impostor_inner = "".join(_html_card(r) for r in i_cards)
+                found_section_html += (
+                    '<details class="unknown-fold" style="margin-top:18px">'
+                    f'<summary>Possible impostors ({len(i_cards)})</summary>'
+                    '<div class="aux-panel" style="margin-top:14px">'
+                    f'<div class="accounts-grid">{impostor_inner}</div>'
+                    '</div></details>'
+                )
     else:
         found_section_html = (
             '<div class="accounts-grid">'
@@ -2804,7 +3029,7 @@ def export_html(grouped, raw, elapsed, path: Path, overall=None, clusters=None, 
     path.write_text(page, encoding="utf-8")
 
 
-def export_pdf(grouped, raw, elapsed, path: Path, overall=None, clusters=None, emails=None, deep_evidence=None, face_map=None, dark=False) -> None:
+def export_pdf(grouped, raw, elapsed, path: Path, overall=None, clusters=None, emails=None, deep_evidence=None, face_map=None, dark=False, dis_clusters=None) -> None:
     """Render the HTML report to PDF via playwright (Chromium)."""
     try:
         from playwright.sync_api import sync_playwright
@@ -2821,7 +3046,7 @@ def export_pdf(grouped, raw, elapsed, path: Path, overall=None, clusters=None, e
         export_html(
             grouped, raw, elapsed, html_path,
             overall, clusters, emails, deep_evidence, face_map,
-            dark=dark, include_toggle=False,
+            dark=dark, include_toggle=False, dis_clusters=dis_clusters,
         )
         with sync_playwright() as pw:
             browser = pw.chromium.launch()
@@ -2894,17 +3119,21 @@ def export_report(
     deep_evidence=None,
     face_map=None,
     dark: bool = False,
+    dis_clusters=None,
 ) -> None:
     """Dispatch by extension. Defaults to JSON if the suffix is unrecognised."""
     suffix = path.suffix.lower()
     if suffix == ".html" or suffix == ".htm":
-        export_html(grouped, raw, elapsed, path, overall, clusters, emails, deep_evidence, face_map, dark=dark)
+        export_html(grouped, raw, elapsed, path, overall, clusters, emails, deep_evidence, face_map,
+                    dark=dark, dis_clusters=dis_clusters)
     elif suffix == ".pdf":
-        export_pdf(grouped, raw, elapsed, path, overall, clusters, emails, deep_evidence, face_map, dark=dark)
+        export_pdf(grouped, raw, elapsed, path, overall, clusters, emails, deep_evidence, face_map,
+                   dark=dark, dis_clusters=dis_clusters)
     elif suffix == ".md" or suffix == ".markdown" or suffix == ".txt":
-        export_markdown(grouped, raw, elapsed, path, overall, clusters)
+        export_markdown(grouped, raw, elapsed, path, overall, clusters, dis_clusters=dis_clusters)
     else:
-        export_json(grouped, raw, elapsed, path, overall, clusters, emails, deep_evidence)
+        export_json(grouped, raw, elapsed, path, overall, clusters, emails, deep_evidence,
+                    dis_clusters=dis_clusters)
 
 
 # ---------------------------------------------------------------------------
@@ -3074,6 +3303,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "--show-all", action="store_true",
         help="include 'possible impostor' accounts in terminal output "
              "(default: show count only)",
+    )
+    p.add_argument(
+        "--no-cluster", action="store_true",
+        help="disable identity disambiguation clustering; show flat tier-based "
+             "output instead of grouped-by-identity output",
     )
     p.add_argument("--json", dest="as_json", action="store_true", help="emit JSON results to stdout")
     p.add_argument(
@@ -3262,16 +3496,29 @@ def main(argv: Optional[list[str]] = None) -> int:
         subject_name = getattr(overall, "display_name", None) or ""
         _confidence.score_all(_found_for_scoring, clusters or [], subject_name, raw)
 
+    # Identity disambiguation — cluster found accounts into distinct identity groups.
+    # Skipped when --no-cluster, --no-identity, or there are no found results.
+    _dis_clusters = None
+    no_cluster = getattr(args, "no_cluster", False)
+    if not no_cluster and not args.no_identity and _found_for_scoring:
+        _dis_clusters = _disambiguation.disambiguate(
+            _found_for_scoring, clusters or [], raw
+        )
+        _disambiguation.attach_identity_fields(_found_for_scoring, _dis_clusters)
+
     if args.as_json:
-        payload = _build_json_payload(grouped, raw, elapsed, overall, clusters, emails, deep_evidence)
+        payload = _build_json_payload(grouped, raw, elapsed, overall, clusters, emails,
+                                      deep_evidence, dis_clusters=_dis_clusters)
         print(json.dumps(payload, indent=2))
     elif not args.quiet:
         print_compact(grouped, elapsed, color, args.found_only,
-                      show_all=getattr(args, "show_all", False))
+                      show_all=getattr(args, "show_all", False),
+                      dis_clusters=_dis_clusters)
         if emails:
             found_for_print, _, _ = _flatten(grouped)
             _print_emails_section(found_for_print, emails, color)
-        if not args.found_only:
+        # Identity summary only when clustering is off (clustering replaces it).
+        if not args.found_only and no_cluster:
             _print_identity_summary(overall, clusters, color)
 
     # --- Watch mode: snapshot + diff -------------------------------------
@@ -3296,7 +3543,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         export_path = resolve_export_path(args.export, raw)
         if export_path.parent and not export_path.parent.exists():
             export_path.parent.mkdir(parents=True, exist_ok=True)
-        export_report(grouped, raw, elapsed, export_path, overall, clusters, emails, deep_evidence, face_map, dark=args.dark)
+        export_report(grouped, raw, elapsed, export_path, overall, clusters, emails, deep_evidence, face_map, dark=args.dark, dis_clusters=_dis_clusters)
         print(
             f"{_c(color,'dim')}Report written to {export_path}{_c(color,'reset')}",
             file=sys.stderr,

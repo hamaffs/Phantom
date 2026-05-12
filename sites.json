@@ -258,20 +258,27 @@
   {
     "name": "Instagram",
     "category": "social",
-    "url": "https://www.instagram.com/{username}/",
+    "url": "https://i.instagram.com/api/v1/users/web_profile_info/?username={username}",
     "method": "message",
     "presence_text": [
-      "\"username\":\"{username}\"",
-      "@{username}"
+      "\"username\":\"{username}\""
     ],
-    "absence_text": [
-      "Sorry, this page isn't available",
-      "Page Not Found"
-    ],
+    "absence_text": [],
     "protection": [
       "tls_fingerprint"
     ],
-    "reliability": 70
+    "reliability": 90,
+    "valid_status": [
+      200
+    ],
+    "invalid_status": [
+      404
+    ],
+    "headers": {
+      "x-ig-app-id": "936619743392459",
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "Accept": "*/*"
+    }
   },
   {
     "name": "Facebook",
@@ -638,25 +645,6 @@
       "tls_fingerprint"
     ],
     "reliability": 90
-  },
-  {
-    "name": "Spotify",
-    "category": "media",
-    "url": "https://open.spotify.com/user/{username}",
-    "method": "message",
-    "presence_text": [
-      "open.spotify.com/user/{username}"
-    ],
-    "absence_text": [
-      "Page not found</title>"
-    ],
-    "valid_status": [
-      200
-    ],
-    "invalid_status": [
-      404
-    ],
-    "reliability": 85
   },
   {
     "name": "Last.fm",
