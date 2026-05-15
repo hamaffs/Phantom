@@ -39,6 +39,7 @@ dependencies = [
     "imagehash>=4.3.0",
     "opencv-python>=4.8.0",
     "playwright>=1.40.0",
+    "textual>=0.40.0",
 ]
 
 [project.optional-dependencies]
@@ -57,6 +58,9 @@ phantom = "checker:main"
 [tool.setuptools]
 # Phantom is a flat-layout module collection, not a package. List the
 # modules explicitly to avoid setuptools trying to auto-discover.
+# `include-package-data = true` works with MANIFEST.in to ship the
+# loose data files (sites.json, canaries.json).
+include-package-data = true
 py-modules = [
     "checker",
     "cli",
@@ -84,10 +88,13 @@ py-modules = [
     "playwright_backend",
     "photo_deep",
     "apis",
+    "tui_assets",
+    "tui_launcher",
+    "tui_app",
 ]
 packages = ["exporters", "tests"]
 
-[tool.setuptools.package-data]
-# Ship sites.json and canaries.json so installs include the canonical
-# site database and the self-check canaries.
-"*" = ["sites.json", "tests/canaries.json"]
+# sites.json and canaries.json get installed to `share/phantom/` next
+# to the venv. cli.py looks for them there as a fallback.
+[tool.setuptools.data-files]
+"share/phantom" = ["sites.json", "tests/canaries.json"]

@@ -1,0 +1,8 @@
+# Ship the data files needed at runtime alongside the Python modules.
+# Without this, `pip install phantom-osint` puts the code in place but
+# sites.json and canaries.json get dropped, and `phantom` fails on
+# first run with "sites file not found".
+include sites.json
+include README.md
+include requirements.txt
+recursive-include tests *.json
