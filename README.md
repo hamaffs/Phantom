@@ -4,7 +4,7 @@ OSINT username checker for finding someone across the internet.
 
 You give it a handle (or a name, or a profile URL), it checks ~99 sites in parallel and builds you a dossier: every account found, photos, cross-links, breach data, and an investigation graph you can click around.
 
-![scan in progress](screenshots/phantom_test.mp4)
+https://github.com/user-attachments/assets/65a68e46-8046-4df2-8a30-2d51b9362a42
 
 ## What it does
 
