@@ -31,3 +31,4 @@ env/
 # Phantom-specific
 .phantom-cache/
 *.local.json
+*.kate-swp
