@@ -1251,12 +1251,17 @@ def main(argv: Optional[list[str]] = None) -> int:
                         for r in rs if r.exists is True
                     ]
                     if new_dicts:
-                        merged = _dedupe_same_site_dicts(
-                            found_dicts + new_dicts,
-                        )
+                        merged = _dedupe_same_site_dicts([
+                            asdict(r)
+                            for _, rs in results
+                            for r in rs if r.exists is True
+                        ])
                         overall, clusters, deep_evidence, face_map, photo_bytes_map = \
                             await build_overall_and_clusters(
-                                merged, deep_options=deep_options,
+                                merged,
+                                deep_options=photo_deep.options_from_apis(
+                                    enabled=args.photo_deep,
+                                ),
                             )
 
         return results, overall, clusters, emails, deep_evidence, face_map, photo_bytes_map

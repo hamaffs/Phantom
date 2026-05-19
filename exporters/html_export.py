@@ -3056,9 +3056,11 @@ def _format_region(overall) -> str:
         parts.append(", ".join(locs))
     geo = getattr(overall, "geo_hint", None)
     if geo and getattr(geo, "region", None) and geo.region not in (locs or []):
+        conf = getattr(geo, "confidence", None)
+        conf_label = f"{conf:.0%}" if isinstance(conf, (int, float)) else (str(conf) if conf else "low")
         parts.append(
             f'<em>likely {html.escape(geo.region)} '
-            f'({html.escape(getattr(geo, "confidence", "low"))})</em>'
+            f'({html.escape(conf_label)})</em>'
         )
     return " · ".join(parts) if parts else "—"
 # Words that show up inside platform-decorated display names but aren't
